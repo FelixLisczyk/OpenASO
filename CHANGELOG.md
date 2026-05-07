@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0 - 2026-05-07
+
+Initial release.  - Track App Store keyword rankings across storefronts. - View app ratings, reviews, and store metadata in one place. - Export ranking and storefront data for analysis. - Receive future updates automatically through the built-in updater.
+
 ## 0.2.0 - 2026-05-07
 
 Initial release.  - Track App Store keyword rankings across storefronts. - View app ratings, reviews, and store metadata in one place. - Export ranking and storefront data for analysis. - Receive future updates automatically through the built-in updater.
