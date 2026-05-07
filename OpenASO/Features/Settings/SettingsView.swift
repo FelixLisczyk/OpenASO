@@ -1,0 +1,711 @@
+import SwiftUI
+import SwiftData
+import UniformTypeIdentifiers
+
+struct SettingsView: View {
+    @Environment(AppServices.self) private var services
+    @Environment(\.modelContext) private var modelContext
+
+    private let validatesOnAppear: Bool
+    private let focusSection: AppleAdsSettingsFocusSection?
+    private let initialConnectionState: AppleAdsConnectionState?
+
+    @State private var clientID = ""
+    @State private var teamID = ""
+    @State private var keyID = ""
+    @State private var privateKey = ""
+    @State private var orgID = ""
+    @State private var dailyRefreshTime = Date()
+    @State private var webLoginUsername = ""
+    @State private var webLoginPassword = ""
+    @State private var connectionState: AppleAdsConnectionState
+    @State private var isSavedLoginExpanded = false
+    @State private var isSavedLoginHovered = false
+    @State private var showsSavedLoginControls = false
+    @State private var savedLoginStatus: VerificationStatus?
+    @State private var dependencyStatus: AppleAdsWebSessionDependencyStatus?
+    @State private var manualAppleAdsAppID = ""
+    @State private var manualAppleAdsStatus: VerificationStatus?
+    @State private var ascIssuerID = ""
+    @State private var ascKeyID = ""
+    @State private var ascPrivateKey = ""
+    @State private var ascConnectionState: AppStoreConnectConnectionState = .notConnected
+    @State private var ascStatus: VerificationStatus?
+    @State private var isASCPrivateKeyDropTargeted = false
+
+    init(
+        validatesOnAppear: Bool = false,
+        focusSection: AppleAdsSettingsFocusSection? = nil,
+        initialConnectionState: AppleAdsConnectionState? = nil
+    ) {
+        self.validatesOnAppear = validatesOnAppear
+        self.focusSection = focusSection
+        self.initialConnectionState = initialConnectionState
+        _connectionState = State(initialValue: initialConnectionState ?? .notConnected)
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            Form {
+                Section {
+                    Toggle("Automatic Refresh", isOn: automaticRefreshEnabled)
+
+                    DatePicker("Refresh Time", selection: $dailyRefreshTime, displayedComponents: .hourAndMinute)
+                        .disabled(!services.settingsStore.isAutomaticRefreshEnabled)
+                        .onChange(of: dailyRefreshTime) { _, newValue in
+                            services.settingsStore.saveRefreshTime(from: newValue)
+                        }
+
+                    if let lastRefreshTriggeredAt = services.settingsStore.lastRefreshTriggeredAt {
+                        Text("Last triggered \(lastRefreshTriggeredAt.formatted(date: .abbreviated, time: .shortened))")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("No daily refresh has run yet.")
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Daily Refresh")
+                } footer: {
+                    Text("OpenASO refreshes stale keyword rankings once per local day after this time when automatic refresh is enabled.")
+                }
+                .id(AppleAdsSettingsFocusSection.dailyRefresh)
+
+                appleAdsSection
+                .id(AppleAdsSettingsFocusSection.webSession)
+
+                appStoreConnectSection
+                    .id(AppleAdsSettingsFocusSection.appStoreConnect)
+
+                analyticsSection
+                    .id(AppleAdsSettingsFocusSection.analytics)
+            }
+            .formStyle(.grouped)
+            .contentMargins(.vertical, 20, for: .scrollContent)
+            .contentMargins(.horizontal, 24, for: .scrollContent)
+            .frame(
+                minWidth: 460,
+                idealWidth: 500,
+                maxWidth: 540,
+                minHeight: 700,
+                idealHeight: 760,
+                alignment: .topTrailing
+            )
+            .navigationTitle("Settings")
+            .onAppear {
+                loadCredentials()
+                loadAppStoreConnectCredentials()
+                loadDailyRefreshTime()
+                loadWebLoginCredentials()
+                loadDependencyStatus()
+                showsSavedLoginControls = services.appleAdsCredentialStore.hasWebLoginCredentials
+                    || services.appleAdsWebSessionStore.hasSession
+                if initialConnectionState == nil {
+                    connectionState = inferredConnectionState()
+                }
+                ascConnectionState = inferredAppStoreConnectConnectionState()
+                let targetFocusSection = focusSection ?? services.settingsStore.requestedSettingsFocusSection
+                if let targetFocusSection {
+                    proxy.scrollTo(targetFocusSection, anchor: .top)
+                    services.settingsStore.clearSettingsFocusRequest()
+                }
+                if validatesOnAppear {
+                    validateAppleAdsAccess()
+                }
+                services.analyticsService.capture(.settingsOpened(focusSection: targetFocusSection?.analyticsValue ?? "none"))
+            }
+            .onChange(of: services.settingsStore.requestedSettingsFocusSection) { _, requestedSection in
+                guard let requestedSection else { return }
+                proxy.scrollTo(requestedSection, anchor: .top)
+                services.settingsStore.clearSettingsFocusRequest()
+            }
+        }
+    }
+
+    private var analyticsSection: some View {
+        Section {
+            Toggle("Share Anonymous Analytics", isOn: analyticsEnabled)
+        } header: {
+            Text("Analytics")
+        } footer: {
+            Text("OpenASO sends anonymous product usage events to understand which features are used and how often. It does not collect identifying information or details about your apps, keywords, reviews, replies, credentials, search text, or countries.")
+        }
+    }
+
+    private var appStoreConnectSection: some View {
+        Section {
+            AppStoreConnectConnectionStatusRow(state: ascConnectionState)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Issuer ID")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                TextField("Issuer ID", text: $ascIssuerID)
+                    .textContentType(.oneTimeCode)
+                    .multilineTextAlignment(.leading)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Key ID")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                TextField("Key ID", text: $ascKeyID)
+                    .textContentType(.oneTimeCode)
+                    .multilineTextAlignment(.leading)
+            }
+
+            ascPrivateKeyInput
+
+            HStack(spacing: 10) {
+                Button("Connect / Validate", action: validateAppStoreConnect)
+                    .disabled(ascConnectionState.isBusy || !enteredAppStoreConnectCredentials.isComplete)
+
+                if ascConnectionState.isBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Spacer()
+
+                Button("Clear Credentials", role: .destructive, action: clearAppStoreConnectCredentials)
+                    .disabled(ascConnectionState.isBusy || !services.appStoreConnectCredentialStore.hasCompleteCredentials)
+            }
+
+            if let ascStatus {
+                Label(ascStatus.message, systemImage: ascStatus.systemImage)
+                    .foregroundStyle(ascStatus.tint)
+                    .font(.caption)
+            }
+        } header: {
+            Text("App Store Connect")
+        } footer: {
+            Text("OpenASO uses App Store Connect API keys only for apps visible to your App Store Connect account. The private key is stored in Keychain.")
+        }
+    }
+
+    private var appleAdsSection: some View {
+        Section {
+            AppleAdsConnectionStatusRow(state: connectionState)
+
+            HStack(spacing: 10) {
+                Button(connectionState.primaryActionTitle, action: connectAppleAds)
+                    .disabled(connectionState.isPrimaryActionDisabled)
+
+                if connectionState.isBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Spacer()
+
+                Button("Check Status", action: validateAppleAdsAccess)
+                    .disabled(connectionState.isBusy || !services.appleAdsWebSessionStore.hasSession)
+
+                Button("Clear", role: .destructive, action: clearWebSession)
+                    .disabled(connectionState.isBusy || !services.appleAdsWebSessionStore.hasSession)
+            }
+
+            if showsManualAppleAdsAppIDFallback {
+                manualAppleAdsAppIDFallback
+            }
+
+            if showsSavedLoginControls {
+                DisclosureGroup(isExpanded: $isSavedLoginExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if services.appleAdsCredentialStore.hasWebLoginCredentials {
+                            Text("Saved login available.")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        TextField("Apple ID", text: $webLoginUsername)
+                            .textContentType(.username)
+                        SecureField("Password", text: $webLoginPassword)
+                            .textContentType(.password)
+
+                        HStack {
+                            Button("Save Login", action: saveWebLoginCredentials)
+                                .disabled(connectionState.isBusy || !enteredWebLoginCredentials.isComplete)
+
+                            Button("Forget Saved Login", role: .destructive, action: clearWebLoginCredentials)
+                                .disabled(connectionState.isBusy || !services.appleAdsCredentialStore.hasWebLoginCredentials)
+                        }
+
+                        if let savedLoginStatus {
+                            Label(savedLoginStatus.message, systemImage: savedLoginStatus.systemImage)
+                                .foregroundStyle(savedLoginStatus.tint)
+                                .font(.caption)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                } label: {
+                    Text("Saved Login")
+                        .foregroundStyle(isSavedLoginHovered ? Color.accentColor : Color.primary)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation {
+                                isSavedLoginExpanded.toggle()
+                            }
+                        }
+                        .onHover { isSavedLoginHovered = $0 }
+                }
+            }
+        } header: {
+            Text("Apple Ads")
+        } footer: {
+            Text("Connect Apple Ads to show keyword popularity in OpenASO. Your Apple Ads account needs access to at least one of your App Store apps. Saved login details are optional and kept in Keychain.")
+        }
+    }
+
+    private var manualAppleAdsAppIDFallback: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("App Store ID")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                TextField("6608976383", text: $manualAppleAdsAppID)
+                    .textContentType(.oneTimeCode)
+                    .monospacedDigit()
+                    .multilineTextAlignment(.leading)
+
+                Button("Use App ID", action: useManualAppleAdsAppID)
+                    .disabled(connectionState.isBusy || manualAppleAdsAppID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if let manualAppleAdsStatus {
+                Label(manualAppleAdsStatus.message, systemImage: manualAppleAdsStatus.systemImage)
+                    .foregroundStyle(manualAppleAdsStatus.tint)
+                    .font(.caption)
+            } else {
+                Text("Enter the App Store ID for one of your apps to finish Apple Ads setup.")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var ascPrivateKeyInput: some View {
+        TextEditor(text: $ascPrivateKey)
+            .font(.system(.body, design: .monospaced))
+            .multilineTextAlignment(.leading)
+            .contentMargins(.top, 8, for: .scrollContent)
+            .frame(minHeight: 120)
+            .overlay(alignment: .topLeading) {
+                if ascPrivateKey.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Drop .p8 auth key here", systemImage: "doc.badge.plus")
+                            .font(.callout.weight(.medium))
+                        Text("You can also paste the private key text directly.")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(isASCPrivateKeyDropTargeted ? Color.accentColor : Color.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 10)
+                    .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(
+                        isASCPrivateKeyDropTargeted ? Color.accentColor : Color.secondary.opacity(0.25),
+                        style: StrokeStyle(lineWidth: isASCPrivateKeyDropTargeted ? 2 : 1, dash: [6, 4])
+                    )
+                    .allowsHitTesting(false)
+            }
+            .background(isASCPrivateKeyDropTargeted ? Color.accentColor.opacity(0.08) : Color.clear)
+            .onDrop(
+                of: [UTType.fileURL.identifier, UTType.plainText.identifier, UTType.utf8PlainText.identifier],
+                isTargeted: $isASCPrivateKeyDropTargeted,
+                perform: handleASCPrivateKeyDrop
+            )
+            .onChange(of: ascPrivateKey) { oldValue, newValue in
+                guard oldValue != newValue, let url = Self.ascPrivateKeyFileURL(from: newValue) else { return }
+                loadASCPrivateKeyFile(at: url)
+            }
+            .accessibilityLabel("App Store Connect private key")
+            .accessibilityHint("Paste private key text or drop a .p8 authentication key file.")
+    }
+
+    private func handleASCPrivateKeyDrop(_ providers: [NSItemProvider]) -> Bool {
+        if let fileProvider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }) {
+            fileProvider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+                if let error {
+                    setASCPrivateKeyDropFailure(error.localizedDescription)
+                    return
+                }
+
+                guard let url = Self.droppedFileURL(from: item) else {
+                    setASCPrivateKeyDropFailure("OpenASO could not read the dropped file.")
+                    return
+                }
+
+                loadASCPrivateKeyFile(at: url)
+            }
+            return true
+        }
+
+        if let textProvider = providers.first(where: { provider in
+            provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier)
+                || provider.hasItemConformingToTypeIdentifier(UTType.utf8PlainText.identifier)
+        }) {
+            let typeIdentifier = textProvider.hasItemConformingToTypeIdentifier(UTType.utf8PlainText.identifier)
+                ? UTType.utf8PlainText.identifier
+                : UTType.plainText.identifier
+            textProvider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, error in
+                if let error {
+                    setASCPrivateKeyDropFailure(error.localizedDescription)
+                    return
+                }
+
+                guard let text = Self.droppedText(from: item) else {
+                    setASCPrivateKeyDropFailure("OpenASO could not read the dropped text.")
+                    return
+                }
+
+                if let url = Self.ascPrivateKeyFileURL(from: text) {
+                    loadASCPrivateKeyFile(at: url)
+                    return
+                }
+
+                Task { @MainActor in
+                    ascPrivateKey = text
+                    ascStatus = .success("Private key text added.")
+                }
+            }
+            return true
+        }
+
+        return false
+    }
+
+    nonisolated private func loadASCPrivateKeyFile(at url: URL) {
+        guard url.pathExtension.lowercased() == "p8" else {
+            setASCPrivateKeyDropFailure("Drop an App Store Connect .p8 auth key file.")
+            return
+        }
+
+        do {
+            let isAccessing = url.startAccessingSecurityScopedResource()
+            defer {
+                if isAccessing {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            let data = try Data(contentsOf: url)
+            guard let privateKey = String(data: data, encoding: .utf8), !privateKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                setASCPrivateKeyDropFailure("The .p8 auth key file is empty or not valid UTF-8 text.")
+                return
+            }
+
+            Task { @MainActor in
+                ascPrivateKey = privateKey
+                ascStatus = .success("Private key loaded from \(url.lastPathComponent).")
+            }
+        } catch {
+            setASCPrivateKeyDropFailure(OpenASOError.map(error).localizedDescription)
+        }
+    }
+
+    nonisolated private func setASCPrivateKeyDropFailure(_ message: String) {
+        Task { @MainActor in
+            ascStatus = .failure(message)
+        }
+    }
+
+    nonisolated private static func droppedFileURL(from item: NSSecureCoding?) -> URL? {
+        if let url = item as? URL {
+            return url
+        }
+
+        if let data = item as? Data {
+            return URL(dataRepresentation: data, relativeTo: nil)
+        }
+
+        if let string = item as? String {
+            return URL(string: string)
+        }
+
+        return nil
+    }
+
+    nonisolated private static func droppedText(from item: NSSecureCoding?) -> String? {
+        if let string = item as? String {
+            return string
+        }
+
+        if let string = item as? NSString {
+            return string as String
+        }
+
+        if let data = item as? Data {
+            return String(data: data, encoding: .utf8)
+        }
+
+        return nil
+    }
+
+    nonisolated private static func ascPrivateKeyFileURL(from text: String) -> URL? {
+        let fileReference = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !fileReference.isEmpty, !fileReference.contains("\n"), !fileReference.contains("\r") else { return nil }
+
+        let url: URL?
+        if let parsedURL = URL(string: fileReference), parsedURL.isFileURL {
+            url = parsedURL
+        } else {
+            url = URL(fileURLWithPath: (fileReference as NSString).expandingTildeInPath)
+        }
+
+        guard let url, url.pathExtension.lowercased() == "p8" else { return nil }
+        return url
+    }
+
+    private var enteredCredentials: AppleAdsCredentials {
+        AppleAdsCredentials(
+            clientID: clientID,
+            teamID: teamID,
+            keyID: keyID,
+            privateKey: privateKey,
+            orgID: orgID
+        )
+    }
+
+    private var enteredWebLoginCredentials: AppleAdsWebLoginCredentials {
+        AppleAdsWebLoginCredentials(username: webLoginUsername, password: webLoginPassword)
+    }
+
+    private var enteredAppStoreConnectCredentials: AppStoreConnectCredentials {
+        AppStoreConnectCredentials(
+            issuerID: ascIssuerID,
+            keyID: ascKeyID,
+            privateKey: ascPrivateKey
+        )
+    }
+
+    private var automaticRefreshEnabled: Binding<Bool> {
+        Binding(
+            get: { services.settingsStore.isAutomaticRefreshEnabled },
+            set: { services.settingsStore.setAutomaticRefreshEnabled($0) }
+        )
+    }
+
+    private var analyticsEnabled: Binding<Bool> {
+        Binding(
+            get: { services.settingsStore.isAnalyticsEnabled },
+            set: { services.analyticsService.setAnalyticsEnabled($0) }
+        )
+    }
+
+    private var showsManualAppleAdsAppIDFallback: Bool {
+        switch connectionState {
+        case .expiredSession, .noLinkedApps, .apiIssue:
+            return true
+        case .notConnected, .installingHelper, .openingBrowser, .detectingLinkedApp, .validatingSession, .connected, .dependencyIssue:
+            return false
+        }
+    }
+
+    private func loadCredentials() {
+        let credentials = services.appleAdsCredentialStore.apiCredentials
+        clientID = credentials.clientID
+        teamID = credentials.teamID
+        keyID = credentials.keyID
+        privateKey = credentials.privateKey
+        orgID = credentials.orgID
+    }
+
+    private func loadAppStoreConnectCredentials() {
+        let credentials = services.appStoreConnectCredentialStore.credentials
+        ascIssuerID = credentials.issuerID
+        ascKeyID = credentials.keyID
+        ascPrivateKey = credentials.privateKey
+    }
+
+    private func loadDailyRefreshTime() {
+        dailyRefreshTime = services.settingsStore.refreshTimeDate()
+    }
+
+    private func loadWebLoginCredentials() {
+        let credentials = services.appleAdsCredentialStore.webLoginCredentials
+        webLoginUsername = credentials.username
+        webLoginPassword = credentials.password
+    }
+
+    private func validateAppleAdsAccess() {
+        guard services.appleAdsWebSessionStore.hasSession else {
+            connectionState = .notConnected
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                try await detectAndValidateAppleAds()
+            } catch {
+                connectionState = AppleAdsConnectionState.classified(
+                    error: error,
+                    hasSession: services.appleAdsWebSessionStore.hasSession
+                )
+            }
+        }
+    }
+
+    private func saveWebLoginCredentials() {
+        do {
+            try services.appleAdsCredentialStore.saveWebLoginCredentials(enteredWebLoginCredentials)
+            loadWebLoginCredentials()
+            savedLoginStatus = .success("Login saved for next time.")
+            showsSavedLoginControls = true
+        } catch {
+            savedLoginStatus = .failure(OpenASOError.map(error).localizedDescription)
+        }
+    }
+
+    private func clearWebLoginCredentials() {
+        services.appleAdsCredentialStore.clearWebLoginCredentials()
+        loadWebLoginCredentials()
+        savedLoginStatus = .success("Saved login forgotten.")
+    }
+
+    private func loadDependencyStatus() {
+        do {
+            dependencyStatus = try services.appleAdsWebSessionManager.checkDependencyStatus()
+        } catch {
+            connectionState = .dependencyIssue(OpenASOError.map(error).localizedDescription)
+        }
+    }
+
+    private func connectAppleAds() {
+        Task { @MainActor in
+            do {
+                manualAppleAdsStatus = nil
+                try await prepareAppleAdsHelperIfNeeded()
+                connectionState = .openingBrowser
+                _ = try await services.appleAdsWebSessionManager.refreshSession()
+                showsSavedLoginControls = true
+                try await detectAndValidateAppleAds()
+            } catch {
+                connectionState = AppleAdsConnectionState.classified(
+                    error: error,
+                    hasSession: services.appleAdsWebSessionStore.hasSession
+                )
+            }
+        }
+    }
+
+    private func useManualAppleAdsAppID() {
+        let trimmedAppID = manualAppleAdsAppID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let appStoreID = Int64(trimmedAppID), appStoreID > 0 else {
+            manualAppleAdsStatus = .failure("Enter a valid App Store ID.")
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                manualAppleAdsStatus = nil
+                services.settingsStore.savePopularityContext(appStoreID: appStoreID, storefrontCode: nil)
+                connectionState = .validatingSession
+                _ = try await services.appleAdsWebSessionManager.validateSession(adamId: appStoreID)
+                connectionState = .connected(updatedAt: services.appleAdsWebSessionStore.session?.updatedAt)
+                services.refreshStaleKeywordPopularityAfterAppleAdsConnection()
+                manualAppleAdsStatus = .success("Apple Ads is connected for App ID \(appStoreID).")
+            } catch {
+                services.settingsStore.clearPopularityContextAppStoreID()
+                let message = OpenASOError.map(error).localizedDescription
+                manualAppleAdsStatus = .failure(message)
+                connectionState = AppleAdsConnectionState.classified(
+                    error: error,
+                    hasSession: services.appleAdsWebSessionStore.hasSession
+                )
+            }
+        }
+    }
+
+    private func prepareAppleAdsHelperIfNeeded() async throws {
+        let status = try services.appleAdsWebSessionManager.checkDependencyStatus()
+        dependencyStatus = status
+        guard status.state != .missingNode else {
+            throw OpenASOError.providerUnavailable(status.message)
+        }
+
+        if !status.isReady {
+            connectionState = .installingHelper
+            dependencyStatus = try await services.appleAdsWebSessionManager.installDependencies()
+        }
+    }
+
+    private func detectAndValidateAppleAds() async throws {
+        connectionState = .detectingLinkedApp
+        try await ensurePopularityContextApp()
+
+        connectionState = .validatingSession
+        _ = try await services.appleAdsWebSessionManager.validateSession()
+        connectionState = .connected(updatedAt: services.appleAdsWebSessionStore.session?.updatedAt)
+        services.refreshStaleKeywordPopularityAfterAppleAdsConnection()
+    }
+
+    private func ensurePopularityContextApp() async throws {
+        guard services.settingsStore.popularityContextAppStoreID == nil
+            || services.settingsStore.popularityContextStorefrontCode == nil
+        else {
+            return
+        }
+
+        let app = try await services.appleAdsWebSessionManager.resolveDefaultLinkedApp()
+        services.settingsStore.savePopularityContext(
+            appStoreID: app.adamId,
+            storefrontCode: app.countryOrRegionCodes.first
+        )
+    }
+
+    private func clearWebSession() {
+        services.appleAdsWebSessionStore.clear()
+        services.settingsStore.clearPopularityContextAppStoreID()
+        manualAppleAdsAppID = ""
+        manualAppleAdsStatus = nil
+        connectionState = .notConnected
+    }
+
+    private func validateAppStoreConnect() {
+        Task { @MainActor in
+            do {
+                ascConnectionState = .validating
+                try services.appStoreConnectCredentialStore.save(enteredAppStoreConnectCredentials)
+                loadAppStoreConnectCredentials()
+                try await services.appStoreConnectReviewService.validateCredentials(services.appStoreConnectCredentialStore.credentials)
+                ascConnectionState = .connected(updatedAt: .now)
+                ascStatus = .success("App Store Connect is connected.")
+            } catch {
+                let message = OpenASOError.map(error).localizedDescription
+                ascConnectionState = .apiIssue(message)
+                ascStatus = .failure(message)
+            }
+        }
+    }
+
+    private func clearAppStoreConnectCredentials() {
+        services.appStoreConnectCredentialStore.clear()
+        loadAppStoreConnectCredentials()
+        ascConnectionState = .notConnected
+        ascStatus = .success("App Store Connect credentials cleared.")
+    }
+
+    private func inferredAppStoreConnectConnectionState() -> AppStoreConnectConnectionState {
+        guard services.appStoreConnectCredentialStore.hasCompleteCredentials else {
+            return .notConnected
+        }
+
+        return .connected(updatedAt: nil)
+    }
+
+    private func inferredConnectionState() -> AppleAdsConnectionState {
+        if let dependencyStatus, dependencyStatus.state == .missingNode {
+            return .dependencyIssue(dependencyStatus.message)
+        }
+
+        guard services.appleAdsWebSessionStore.hasSession else {
+            return .notConnected
+        }
+
+        return .connected(updatedAt: services.appleAdsWebSessionStore.session?.updatedAt)
+    }
+}

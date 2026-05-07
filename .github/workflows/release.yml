@@ -1,0 +1,458 @@
+name: Release macOS App
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_title:
+        description: GitHub/Sparkle release title
+        required: true
+        type: string
+      changelog_body:
+        description: Markdown release notes
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, Notarize, and Publish
+    runs-on: macos-26
+
+    env:
+      APP_NAME: OpenASO
+      BUNDLE_ID: com.thirdtech.openaso
+      PROJECT_PATH: OpenASO.xcodeproj
+      SCHEME: OpenASO
+      DERIVED_DATA: Build
+      ARCHIVE_PATH: Build/OpenASO.xcarchive
+      EXPORT_PATH: Build/export
+      RELEASE_DIR: Build/release
+      R2_RELEASES_DIR: Build/r2-releases
+      R2_PUBLIC_BASE_URL: https://releases.openaso.thirdtechapps.com
+      R2_RELEASE_OBJECT_PREFIX: releases
+      R2_APPCAST_OBJECT_KEY: appcast.xml
+      R2_LATEST_DMG_OBJECT_KEY: downloads/OpenASO.dmg
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Read release version from project
+        run: |
+          set -euo pipefail
+          ruby -e '
+            project = File.read("OpenASO.xcodeproj/project.pbxproj")
+            version = project[/MARKETING_VERSION = ([^;]+);/, 1]&.strip
+            build = project[/CURRENT_PROJECT_VERSION = ([^;]+);/, 1]&.strip
+            abort "MARKETING_VERSION is missing from the Xcode project" if version.nil? || version.empty?
+            abort "CURRENT_PROJECT_VERSION is missing from the Xcode project" if build.nil? || build.empty?
+            File.open(ENV.fetch("GITHUB_ENV"), "a") do |env|
+              env.puts "RELEASE_VERSION=#{version}"
+              env.puts "RELEASE_BUILD_NUMBER=#{build}"
+            end
+          '
+
+      - name: Install AWS CLI
+        run: |
+          set -euo pipefail
+          if ! command -v aws >/dev/null 2>&1; then
+            brew install awscli
+          fi
+          aws --version
+
+      - name: Sync existing R2 release state
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_EC2_METADATA_DISABLED: true
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          : "${CLOUDFLARE_ACCOUNT_ID:?CLOUDFLARE_ACCOUNT_ID secret is required}"
+          : "${CLOUDFLARE_R2_BUCKET:?CLOUDFLARE_R2_BUCKET repository variable is required}"
+          R2_ENDPOINT="https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
+
+          mkdir -p "$R2_RELEASES_DIR/$R2_RELEASE_OBJECT_PREFIX"
+          aws s3 sync \
+            "s3://$CLOUDFLARE_R2_BUCKET/$R2_RELEASE_OBJECT_PREFIX/" \
+            "$R2_RELEASES_DIR/$R2_RELEASE_OBJECT_PREFIX/" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --exclude "*" \
+            --include "*.dmg" \
+            --include "*.dmg.md"
+
+          if aws s3 ls "s3://$CLOUDFLARE_R2_BUCKET/$R2_APPCAST_OBJECT_KEY" --endpoint-url "$R2_ENDPOINT" >/dev/null 2>&1; then
+            aws s3 cp \
+              "s3://$CLOUDFLARE_R2_BUCKET/$R2_APPCAST_OBJECT_KEY" \
+              "$R2_RELEASES_DIR/$R2_APPCAST_OBJECT_KEY" \
+              --endpoint-url "$R2_ENDPOINT"
+          fi
+
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_VERSION"
+          BUILD_NUMBER="$RELEASE_BUILD_NUMBER"
+
+          [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || {
+            echo "version must look like 1.2 or 1.2.3" >&2
+            exit 1
+          }
+          [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || {
+            echo "build_number must be an integer" >&2
+            exit 1
+          }
+
+          if [[ -f "$R2_RELEASES_DIR/$R2_APPCAST_OBJECT_KEY" ]]; then
+            ruby -rrubygems -rrexml/document -e '
+              current_version = ARGV[0]
+              current_build = ARGV[1].to_i
+              appcast = REXML::Document.new(File.read(ARGV[2]))
+              latest = appcast.elements.to_a("//item").first
+              exit 0 unless latest
+              previous_version = latest.elements["sparkle:shortVersionString"]&.text || latest.elements["title"]&.text.to_s[/[0-9]+(\.[0-9]+){1,2}/]
+              previous_build = latest.elements["sparkle:version"]&.text.to_i
+              if previous_version && Gem::Version.new(current_version) <= Gem::Version.new(previous_version)
+                abort "version #{current_version} must be newer than published #{previous_version}"
+              end
+              if current_build <= previous_build
+                abort "build #{current_build} must be newer than published build #{previous_build}"
+              end
+            ' "$VERSION" "$BUILD_NUMBER" "$R2_RELEASES_DIR/$R2_APPCAST_OBJECT_KEY"
+          fi
+
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project "$PROJECT_PATH" \
+            -scheme "$SCHEME" \
+            -derivedDataPath "$DERIVED_DATA"
+
+      - name: Run tests
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project "$PROJECT_PATH" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -derivedDataPath "$DERIVED_DATA" \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Locate Sparkle tools
+        id: sparkle-tools
+        run: |
+          set -euo pipefail
+          GENERATE_APPCAST="$(find "$DERIVED_DATA/SourcePackages/artifacts" -path '*/Sparkle/bin/generate_appcast' -type f | head -1)"
+          GENERATE_KEYS="$(find "$DERIVED_DATA/SourcePackages/artifacts" -path '*/Sparkle/bin/generate_keys' -type f | head -1)"
+          [[ -x "$GENERATE_APPCAST" ]] || { echo "generate_appcast not found" >&2; exit 1; }
+          [[ -x "$GENERATE_KEYS" ]] || { echo "generate_keys not found" >&2; exit 1; }
+          echo "generate_appcast=$GENERATE_APPCAST" >> "$GITHUB_OUTPUT"
+          echo "generate_keys=$GENERATE_KEYS" >> "$GITHUB_OUTPUT"
+
+      - name: Import Sparkle key
+        id: sparkle-key
+        env:
+          SPARKLE_PRIVATE_KEY_BASE64: ${{ secrets.SPARKLE_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          PRIVATE_KEY_FILE="$RUNNER_TEMP/sparkle_private_key"
+          printf '%s' "$SPARKLE_PRIVATE_KEY_BASE64" | base64 --decode > "$PRIVATE_KEY_FILE"
+          echo "SPARKLE_PRIVATE_KEY_FILE=$PRIVATE_KEY_FILE" >> "$GITHUB_ENV"
+          "${{ steps.sparkle-tools.outputs.generate_keys }}" -f "$PRIVATE_KEY_FILE"
+          KEY_OUTPUT="$RUNNER_TEMP/sparkle-key-output.txt"
+          "${{ steps.sparkle-tools.outputs.generate_keys }}" -p | tee "$KEY_OUTPUT"
+          PUBLIC_KEY="$(grep -Eo '[A-Za-z0-9+/]{40,}={0,2}' "$KEY_OUTPUT" | tail -1)"
+          [[ -n "$PUBLIC_KEY" ]] || { echo "Could not derive SUPublicEDKey from Sparkle key import" >&2; exit 1; }
+          echo "::add-mask::$PUBLIC_KEY"
+          echo "public_key=$PUBLIC_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog and release notes
+        env:
+          RELEASE_TITLE: ${{ inputs.release_title }}
+          CHANGELOG_BODY: ${{ inputs.changelog_body }}
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_VERSION"
+          BODY_FILE="$RUNNER_TEMP/changelog-body.md"
+          printf '%s\n' "$CHANGELOG_BODY" > "$BODY_FILE"
+
+          ruby -e '
+            version, title, body_path, changelog_path = ARGV
+            body = File.read(body_path).strip
+            existing = File.exist?(changelog_path) ? File.read(changelog_path) : "# Changelog\n"
+            header = "## #{version} - #{Time.now.utc.strftime("%Y-%m-%d")}"
+            entry = "#{header}\n\n#{body}\n\n"
+            existing = existing.sub(/\A# Changelog\n+/, "# Changelog\n\n")
+            File.write(changelog_path, existing.sub(/\A# Changelog\n\n/, "# Changelog\n\n#{entry}"))
+          ' "$VERSION" "$RELEASE_TITLE" "$BODY_FILE" CHANGELOG.md
+
+          mkdir -p "$RELEASE_DIR"
+          script/release/generate_release_notes.sh "$VERSION" "$RELEASE_TITLE" "$BODY_FILE" "$RELEASE_DIR"
+
+      - name: Import Developer ID certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/release-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer-id.p12"
+          trap 'rm -f "$CERTIFICATE_PATH"' EXIT
+
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Archive
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ steps.sparkle-key.outputs.public_key }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "$PROJECT_PATH" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -archivePath "$ARCHIVE_PATH" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -destination 'generic/platform=macOS' \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            POSTHOG_PROJECT_TOKEN="$POSTHOG_PROJECT_TOKEN" \
+            POSTHOG_HOST="$POSTHOG_HOST" \
+            SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY"
+
+      - name: Export app
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          EXPORT_OPTIONS="$RUNNER_TEMP/ExportOptions.plist"
+          sed "s/__APPLE_TEAM_ID__/$APPLE_TEAM_ID/g" script/release/ExportOptions.plist > "$EXPORT_OPTIONS"
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist "$EXPORT_OPTIONS"
+
+      - name: Notarize and staple app
+        env:
+          APPSTORE_CONNECT_API_KEY_ID: ${{ secrets.APPSTORE_CONNECT_API_KEY_ID }}
+          APPSTORE_CONNECT_API_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_API_ISSUER_ID }}
+          APPSTORE_CONNECT_API_PRIVATE_KEY_BASE64: ${{ secrets.APPSTORE_CONNECT_API_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          APP_PATH="$EXPORT_PATH/$APP_NAME.app"
+          API_KEY_PATH="$RUNNER_TEMP/AuthKey_$APPSTORE_CONNECT_API_KEY_ID.p8"
+          NOTARY_RESULT_PATH="$RUNNER_TEMP/notary-app-result.json"
+          trap 'rm -f "$API_KEY_PATH"' EXIT
+          printf '%s' "$APPSTORE_CONNECT_API_PRIVATE_KEY_BASE64" | base64 --decode > "$API_KEY_PATH"
+          grep -q "BEGIN PRIVATE KEY" "$API_KEY_PATH" || { echo "Decoded App Store Connect API key is not a PEM private key" >&2; exit 1; }
+
+          ditto -c -k --keepParent "$APP_PATH" "$RUNNER_TEMP/$APP_NAME.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/$APP_NAME.zip" \
+            --key "$API_KEY_PATH" \
+            --key-id "$APPSTORE_CONNECT_API_KEY_ID" \
+            --issuer "$APPSTORE_CONNECT_API_ISSUER_ID" \
+            --wait \
+            --output-format json | tee "$NOTARY_RESULT_PATH"
+          STATUS="$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).fetch("status")' "$NOTARY_RESULT_PATH")"
+          SUBMISSION_ID="$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).fetch("id")' "$NOTARY_RESULT_PATH")"
+          if [ "$STATUS" != "Accepted" ]; then
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --key "$API_KEY_PATH" \
+              --key-id "$APPSTORE_CONNECT_API_KEY_ID" \
+              --issuer "$APPSTORE_CONNECT_API_ISSUER_ID"
+            exit 1
+          fi
+          xcrun stapler staple "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+
+      - name: Create DMG
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_VERSION"
+          APP_PATH="$EXPORT_PATH/$APP_NAME.app"
+          DMG_PATH="$RELEASE_DIR/OpenASO-$VERSION.dmg"
+          CREATE_DMG_OUTPUT="$RELEASE_DIR/$APP_NAME.dmg"
+
+          npx --yes create-dmg@8.1.0 \
+            --overwrite \
+            --no-version-in-filename \
+            --no-code-sign \
+            --dmg-title "OpenASO $VERSION" \
+            "$APP_PATH" \
+            "$RELEASE_DIR"
+          mv "$CREATE_DMG_OUTPUT" "$DMG_PATH"
+
+      - name: Sign, notarize, and staple DMG
+        env:
+          APPSTORE_CONNECT_API_KEY_ID: ${{ secrets.APPSTORE_CONNECT_API_KEY_ID }}
+          APPSTORE_CONNECT_API_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_API_ISSUER_ID }}
+          APPSTORE_CONNECT_API_PRIVATE_KEY_BASE64: ${{ secrets.APPSTORE_CONNECT_API_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_VERSION"
+          DMG_PATH="$RELEASE_DIR/OpenASO-$VERSION.dmg"
+          API_KEY_PATH="$RUNNER_TEMP/AuthKey_$APPSTORE_CONNECT_API_KEY_ID.p8"
+          NOTARY_RESULT_PATH="$RUNNER_TEMP/notary-dmg-result.json"
+          trap 'rm -f "$API_KEY_PATH"' EXIT
+          printf '%s' "$APPSTORE_CONNECT_API_PRIVATE_KEY_BASE64" | base64 --decode > "$API_KEY_PATH"
+          grep -q "BEGIN PRIVATE KEY" "$API_KEY_PATH" || { echo "Decoded App Store Connect API key is not a PEM private key" >&2; exit 1; }
+
+          codesign --force --sign "Developer ID Application" --timestamp "$DMG_PATH"
+          xcrun notarytool submit "$DMG_PATH" \
+            --key "$API_KEY_PATH" \
+            --key-id "$APPSTORE_CONNECT_API_KEY_ID" \
+            --issuer "$APPSTORE_CONNECT_API_ISSUER_ID" \
+            --wait \
+            --output-format json | tee "$NOTARY_RESULT_PATH"
+          STATUS="$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).fetch("status")' "$NOTARY_RESULT_PATH")"
+          SUBMISSION_ID="$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).fetch("id")' "$NOTARY_RESULT_PATH")"
+          if [ "$STATUS" != "Accepted" ]; then
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --key "$API_KEY_PATH" \
+              --key-id "$APPSTORE_CONNECT_API_KEY_ID" \
+              --issuer "$APPSTORE_CONNECT_API_ISSUER_ID"
+            exit 1
+          fi
+          xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+
+      - name: Verify signed artifacts
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_VERSION"
+          APP_PATH="$EXPORT_PATH/$APP_NAME.app"
+          DMG_PATH="$RELEASE_DIR/OpenASO-$VERSION.dmg"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          spctl --assess --type execute --verbose=2 "$APP_PATH"
+          codesign --verify --verbose=2 "$DMG_PATH"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG_PATH"
+
+      - name: Generate appcast and R2 files
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_VERSION"
+          RELEASE_URL_PREFIX="${R2_PUBLIC_BASE_URL%/}/$R2_RELEASE_OBJECT_PREFIX/"
+          mkdir -p "$R2_RELEASES_DIR/$R2_RELEASE_OBJECT_PREFIX"
+          cp "$RELEASE_DIR/OpenASO-$VERSION.dmg" "$R2_RELEASES_DIR/$R2_RELEASE_OBJECT_PREFIX/"
+          cp "$RELEASE_DIR/OpenASO-$VERSION.dmg.md" "$R2_RELEASES_DIR/$R2_RELEASE_OBJECT_PREFIX/"
+
+          "${{ steps.sparkle-tools.outputs.generate_appcast }}" \
+            --download-url-prefix "$RELEASE_URL_PREFIX" \
+            --release-notes-url-prefix "$RELEASE_URL_PREFIX" \
+            --ed-key-file "$SPARKLE_PRIVATE_KEY_FILE" \
+            -o "$R2_RELEASES_DIR/$R2_APPCAST_OBJECT_KEY" \
+            "$R2_RELEASES_DIR/$R2_RELEASE_OBJECT_PREFIX"
+
+          [[ -f "$R2_RELEASES_DIR/$R2_APPCAST_OBJECT_KEY" ]] || { echo "appcast.xml was not generated" >&2; exit 1; }
+          cp "$R2_RELEASES_DIR/$R2_APPCAST_OBJECT_KEY" "$RELEASE_DIR/$R2_APPCAST_OBJECT_KEY"
+          rm -f "$SPARKLE_PRIVATE_KEY_FILE"
+          echo "SPARKLE_PRIVATE_KEY_FILE=" >> "$GITHUB_ENV"
+
+      - name: Publish release artifacts to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_EC2_METADATA_DISABLED: true
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_VERSION"
+          : "${CLOUDFLARE_ACCOUNT_ID:?CLOUDFLARE_ACCOUNT_ID secret is required}"
+          : "${CLOUDFLARE_R2_BUCKET:?CLOUDFLARE_R2_BUCKET repository variable is required}"
+          R2_ENDPOINT="https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
+
+          aws s3 cp \
+            "$RELEASE_DIR/OpenASO-$VERSION.dmg" \
+            "s3://$CLOUDFLARE_R2_BUCKET/$R2_RELEASE_OBJECT_PREFIX/OpenASO-$VERSION.dmg" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type "application/x-apple-diskimage" \
+            --content-disposition "attachment; filename=OpenASO-$VERSION.dmg" \
+            --cache-control "public, max-age=31536000, immutable"
+
+          aws s3 cp \
+            "$RELEASE_DIR/OpenASO-$VERSION.dmg" \
+            "s3://$CLOUDFLARE_R2_BUCKET/$R2_LATEST_DMG_OBJECT_KEY" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type "application/x-apple-diskimage" \
+            --content-disposition "attachment; filename=OpenASO.dmg" \
+            --cache-control "public, max-age=300, must-revalidate"
+
+          aws s3 cp \
+            "$RELEASE_DIR/OpenASO-$VERSION.dmg.md" \
+            "s3://$CLOUDFLARE_R2_BUCKET/$R2_RELEASE_OBJECT_PREFIX/OpenASO-$VERSION.dmg.md" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type "text/markdown; charset=utf-8" \
+            --cache-control "public, max-age=31536000, immutable"
+
+          aws s3 cp \
+            "$RELEASE_DIR/$R2_APPCAST_OBJECT_KEY" \
+            "s3://$CLOUDFLARE_R2_BUCKET/$R2_APPCAST_OBJECT_KEY" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type "application/xml; charset=utf-8" \
+            --cache-control "public, max-age=300"
+
+      - name: Commit changelog and tag
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "Release v$VERSION"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin HEAD:main
+          git push origin "v$VERSION"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_VERSION"
+          TITLE="$RELEASE_TITLE"
+          DMG_PATH="$RELEASE_DIR/OpenASO-$VERSION.dmg"
+          NOTES_PATH="$RELEASE_DIR/github-release-notes.md"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release edit "v$VERSION" --title "$TITLE" --notes-file "$NOTES_PATH"
+            gh release upload "v$VERSION" "$DMG_PATH" --clobber
+          else
+            gh release create "v$VERSION" "$DMG_PATH" \
+              --title "$TITLE" \
+              --notes-file "$NOTES_PATH" \
+              --verify-tag
+          fi

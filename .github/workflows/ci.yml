@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and Test
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project OpenASO.xcodeproj \
+            -scheme OpenASO \
+            -derivedDataPath Build
+
+      - name: Test
+        run: |
+          xcodebuild test \
+            -project OpenASO.xcodeproj \
+            -scheme OpenASO \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath Build \
+            CODE_SIGNING_ALLOWED=NO

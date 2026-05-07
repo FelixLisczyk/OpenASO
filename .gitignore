@@ -1,0 +1,32 @@
+# macOS and editor state
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local Codex/agent config
+.codex/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.key
+
+# Local exports and profiling output
+*.csv
+test-results/
+*.trace/
+
+# Build and dependency output
+Build/
+.build/
+node_modules/
+dist/
+
+# Xcode user state
+*.xcuserdatad
+*.xcuserstate
