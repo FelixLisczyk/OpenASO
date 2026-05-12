@@ -246,7 +246,7 @@ struct SettingsView: View {
         } header: {
             Text("App Store Connect")
         } footer: {
-            Text("OpenASO uses App Store Connect API keys only for apps visible to your App Store Connect account. The private key is stored in Keychain.")
+            Text("OpenASO uses the App Store Connect API only to read and reply to App Store reviews for apps visible to your account. The private key is stored in your macOS Keychain.")
         }
     }
 
@@ -897,7 +897,7 @@ private struct AppStoreConnectAPIKeyHelpPopover: View {
                 .font(.headline)
                 .foregroundStyle(.primary)
 
-            Text("OpenASO needs three values from a Team API key generated in App Store Connect. The key is only downloadable once, so keep the .p8 file in a safe place.")
+            Text("OpenASO uses this key only to read and reply to App Store reviews. Generate a Team API key in App Store Connect — the .p8 file can only be downloaded once, so keep it somewhere safe.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -905,7 +905,7 @@ private struct AppStoreConnectAPIKeyHelpPopover: View {
             VStack(alignment: .leading, spacing: 8) {
                 stepRow(number: 1, text: "Sign in to App Store Connect with an Account Holder or Admin Apple ID.")
                 stepRow(number: 2, text: "Go to Users and Access → Integrations → App Store Connect API → Team Keys.")
-                stepRow(number: 3, text: "Click the + button, name the key, and pick a role (Admin or Developer is recommended).")
+                stepRow(number: 3, text: "Click the + button, name the key, and set Access to Customer Support — that's the minimum role needed to read and reply to reviews.")
                 stepRow(number: 4, text: "Press Generate, then download the .p8 file. You can only download it once.")
                 stepRow(number: 5, text: "Copy the Issuer ID shown at the top of the Team Keys page.")
                 stepRow(number: 6, text: "Copy the Key ID from the row of the key you just created.")
