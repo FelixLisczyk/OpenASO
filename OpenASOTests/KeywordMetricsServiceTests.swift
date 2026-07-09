@@ -447,6 +447,53 @@ struct KeywordMetricsServiceTests {
         #expect(needsSetupRow.popularityIndicatorState(now: now) == .needsSetup(message: "Popularity failed to fetch. Connect an Apple Ads web session in Settings."))
     }
 
+    @Test
+    func keywordMetricsRecoverAfterTransientKeychainReadFailure() async throws {
+        let container = try ModelContainerFactory.makeModelContainer(isStoredInMemoryOnly: true)
+        let modelContext = ModelContext(container)
+        let defaults = UserDefaults(suiteName: "com.thirdtech.openaso.keychain-recovery.tests.\(UUID().uuidString)") ?? .standard
+        let keychain = InMemoryKeychainService()
+
+        let seedWebSessionStore = AppleAdsWebSessionStore(defaults: defaults, keychain: keychain)
+        try seedWebSessionStore.save(
+            AppleAdsWebSession(cookieHeader: "cookie=value; XSRF-TOKEN-CM=token", xsrfToken: "token", updatedAt: .now)
+        )
+        keychain.failNextReads(1)
+
+        let services = AppServices(
+            httpClient: MockHTTPClient { request in
+                let payload = """
+                {"status":"success","data":[{"name":"focus app","popularity":41}]}
+                """
+                return (Data(payload.utf8), makeHTTPURLResponse(url: try #require(request.url), statusCode: 200))
+            },
+            defaults: defaults,
+            keychain: keychain,
+            loadsEnvironmentCredentials: false,
+            allowsIconNetworkFetches: false,
+            backgroundModelStore: BackgroundModelStore(modelContainer: container)
+        )
+        services.settingsStore.savePopularityContextAppStoreID(123_456_789)
+
+        let trackedApp = TrackedApp(appStoreID: 1, bundleID: nil, name: "App", sellerName: nil, defaultPlatform: .iphone)
+        let query = try KeywordQuery.fetchOrInsert(term: "focus app", storefront: "us", platform: .iphone, in: modelContext)
+        let track = TrackedAppKeyword(term: "focus app", storefront: "us", platform: .iphone, trackedApp: trackedApp, query: query)
+        trackedApp.keywordTracks.append(track)
+        modelContext.insert(trackedApp)
+        modelContext.insert(track)
+        try modelContext.save()
+
+        let firstOutcomes = await services.keywordMetricsService.refreshMetrics(for: trackedApp, tracks: [track], in: modelContext)
+        #expect(firstOutcomes.first?.errorMessage?.contains("Connect an Apple Ads web session") == true)
+
+        let secondOutcomes = await services.keywordMetricsService.refreshMetrics(for: trackedApp, tracks: [track], in: modelContext)
+        #expect(secondOutcomes.first?.errorMessage == nil)
+        #expect(track.statusMessage == nil)
+
+        let storedMetrics = try modelContext.fetch(FetchDescriptor<KeywordDailyMetric>())
+        #expect(storedMetrics.first?.popularityScore == 41)
+    }
+
     private func makeRow(
         term: String,
         trackedApp: TrackedApp,

@@ -52,6 +52,8 @@
 		453E1E4BE015A629E5B3F7B5 /* Storefront/StorefrontCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B399F08A360281DA901E4457 /* Storefront/StorefrontCatalog.swift */; };
 		4D4350544553545300000002 /* OpenASOMCPServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D4350544553545300000001 /* OpenASOMCPServiceTests.swift */; };
 		4D4350545345525600000002 /* OpenASOMCPServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D4350545345525600000001 /* OpenASOMCPServerTests.swift */; };
+		E52B0F8A3B0E81DF48879D42 /* OpenASOMCPRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F7340F44DE565F5C8F9E22 /* OpenASOMCPRuntimeTests.swift */; };
+		53F73D4F96F66D181C9C87EE /* KeychainServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267DE946595C2E3EF9E5BEAE /* KeychainServiceTests.swift */; };
 		4D4350545345525600000003 /* MCP in Frameworks */ = {isa = PBXBuildFile; productRef = C0DEFACE0000000000000109 /* MCP */; };
 		52A1A64F1D49D89D9B5DD204 /* AppPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC65F472D8AF2FC4DE4E8BD8 /* AppPlatform.swift */; };
 		59E573ACDBBB76A905B92574 /* AddKeywordsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87EC021EFE3EDFB1445FFA7 /* AddKeywordsSheet.swift */; };
@@ -250,6 +252,8 @@
 		4980369A7326B82ED173C90B /* MockHTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockHTTPClient.swift; sourceTree = "<group>"; };
 		4D4350544553545300000001 /* OpenASOMCPServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenASOMCPServiceTests.swift; sourceTree = "<group>"; };
 		4D4350545345525600000001 /* OpenASOMCPServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenASOMCPServerTests.swift; sourceTree = "<group>"; };
+		46F7340F44DE565F5C8F9E22 /* OpenASOMCPRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenASOMCPRuntimeTests.swift; sourceTree = "<group>"; };
+		267DE946595C2E3EF9E5BEAE /* KeychainServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceTests.swift; sourceTree = "<group>"; };
 		521B4EBEC0EC5B7902728E9E /* OpenASO.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenASO.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5C5530D41B3742698F02134C /* Credentials/KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Credentials/KeychainService.swift; sourceTree = "<group>"; };
 		5D89E788AED9CC1E4FD78B3D /* AppServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServices.swift; sourceTree = "<group>"; };
@@ -401,6 +405,8 @@
 				8C6BDA000FFE3FC055867E78 /* ITunesSearchFallbackProviderTests.swift */,
 				04E8C4E18F1A4D519C0A1128 /* KeywordMetricsServiceTests.swift */,
 				4D4350545345525600000001 /* OpenASOMCPServerTests.swift */,
+				46F7340F44DE565F5C8F9E22 /* OpenASOMCPRuntimeTests.swift */,
+				267DE946595C2E3EF9E5BEAE /* KeychainServiceTests.swift */,
 				4D4350544553545300000001 /* OpenASOMCPServiceTests.swift */,
 				A0BEEF000000000000000015 /* ScreenshotDownloadServiceTests.swift */,
 				A63CBBCCA79CA32CCB5BFE4F /* TrackedAppKeywordIdentityTests.swift */,
@@ -955,6 +961,8 @@
 				A301EA7838159D6EE3E53FD0 /* ITunesSearchFallbackProviderTests.swift in Sources */,
 				04E8C4E18F1A4D519C0A1127 /* KeywordMetricsServiceTests.swift in Sources */,
 				4D4350545345525600000002 /* OpenASOMCPServerTests.swift in Sources */,
+				E52B0F8A3B0E81DF48879D42 /* OpenASOMCPRuntimeTests.swift in Sources */,
+				53F73D4F96F66D181C9C87EE /* KeychainServiceTests.swift in Sources */,
 				4D4350544553545300000002 /* OpenASOMCPServiceTests.swift in Sources */,
 				A0BEEF000000000000000014 /* ScreenshotDownloadServiceTests.swift in Sources */,
 				FE86E03B40393EF38C032A45 /* TrackedAppKeywordIdentityTests.swift in Sources */,

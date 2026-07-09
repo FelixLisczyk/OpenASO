@@ -162,6 +162,91 @@ struct OpenASOMCPServerTests {
     }
 
     @Test
+    func refreshKeywordMetricsOverHTTPRecoversAfterTransientKeychainReadFailure() async throws {
+        let defaults = UserDefaults(suiteName: "com.thirdtech.openaso.server.keychain-recovery.tests.\(UUID().uuidString)") ?? .standard
+        let keychain = InMemoryKeychainService()
+
+        let seedWebSessionStore = AppleAdsWebSessionStore(defaults: defaults, keychain: keychain)
+        try seedWebSessionStore.save(
+            AppleAdsWebSession(cookieHeader: "cookie=value; XSRF-TOKEN-CM=token", xsrfToken: "token", updatedAt: .now)
+        )
+        keychain.failNextReads(1)
+
+        let webSessionStore = AppleAdsWebSessionStore(defaults: defaults, keychain: keychain)
+        let settingsStore = AppSettingsStore(defaults: defaults)
+        settingsStore.savePopularityContextAppStoreID(999)
+        let keywordMetricsService = KeywordMetricsService(
+            httpClient: MockHTTPClient { request in
+                let payload = """
+                {"status":"success","data":[{"name":"focus app","popularity":41}]}
+                """
+                return (Data(payload.utf8), makeHTTPURLResponse(url: try #require(request.url), statusCode: 200))
+            },
+            credentialStore: AppleAdsCredentialStore(defaults: defaults, keychain: keychain),
+            settingsStore: settingsStore,
+            webSessionStore: webSessionStore
+        )
+
+        let context = try ServerTestContext(
+            keywordMetricsService: keywordMetricsService,
+            popularityContextAppStoreIDProvider: { settingsStore.popularityContextAppStoreID },
+            appleAdsWebSessionProvider: { webSessionStore.session }
+        )
+        try context.insertTrackedApp(appStoreID: 123, name: "Focus Timer")
+        try context.insertTrackedKeyword(appStoreID: 123, term: "focus app")
+
+        let port = try availableLoopbackPort()
+        let controller = OpenASOMCPServerController(portProvider: { port }) {
+            await OpenASOMCPServerFactory(service: context.service).makeServer()
+        }
+        controller.start()
+        defer {
+            controller.stop()
+        }
+
+        let endpointURL = try await waitForEndpointURL(controller)
+
+        var initializeRequest = URLRequest(url: endpointURL)
+        initializeRequest.httpMethod = "POST"
+        initializeRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        initializeRequest.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        initializeRequest.httpBody = Data("""
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"http-keychain-recovery-test","version":"1.0"}}}
+        """.utf8)
+
+        let (initializeData, initializeResponse) = try await URLSession.shared.data(for: initializeRequest)
+        let initializeHTTPResponse = try #require(initializeResponse as? HTTPURLResponse)
+        #expect(initializeHTTPResponse.statusCode == 200)
+        let sessionID = try #require(initializeHTTPResponse.value(forHTTPHeaderField: "MCP-Session-Id"))
+        _ = try jsonRPCObject(from: initializeData)
+
+        var toolRequest = URLRequest(url: endpointURL)
+        toolRequest.httpMethod = "POST"
+        toolRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        toolRequest.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        toolRequest.setValue(sessionID, forHTTPHeaderField: "MCP-Session-Id")
+        toolRequest.setValue("2025-06-18", forHTTPHeaderField: "MCP-Protocol-Version")
+        toolRequest.httpBody = Data("""
+        {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"refresh_keyword_metrics","arguments":{"appStoreID":123}}}
+        """.utf8)
+
+        let (firstData, firstResponse) = try await URLSession.shared.data(for: toolRequest)
+        #expect((firstResponse as? HTTPURLResponse)?.statusCode == 200)
+        let firstResult = try #require(try jsonRPCObject(from: firstData)["result"] as? [String: Any])
+        let firstOutcomes = try #require(firstResult["structuredContent"] as? [String: Any])["outcomes"] as? [[String: Any]]
+        let firstError = try #require(firstOutcomes?.first?["error"] as? [String: Any])
+        #expect((firstError["message"] as? String)?.contains("Connect an Apple Ads web session") == true)
+
+        let (secondData, secondResponse) = try await URLSession.shared.data(for: toolRequest)
+        #expect((secondResponse as? HTTPURLResponse)?.statusCode == 200)
+        let secondResult = try #require(try jsonRPCObject(from: secondData)["result"] as? [String: Any])
+        let secondOutcomes = try #require(secondResult["structuredContent"] as? [String: Any])["outcomes"] as? [[String: Any]]
+        #expect(secondOutcomes?.first?["error"] == nil)
+        let track = try #require(secondOutcomes?.first?["track"] as? [String: Any])
+        #expect(track["popularityScore"] as? Int == 41)
+    }
+
+    @Test
     func controllerReportsInvalidConfiguredPort() async throws {
         let context = try ServerTestContext()
         let controller = OpenASOMCPServerController(portProvider: { 0 }) {
@@ -277,7 +362,11 @@ private struct ServerTestContext {
     let service: OpenASOMCPService
 
     @MainActor
-    init() throws {
+    init(
+        keywordMetricsService: KeywordMetricsService? = nil,
+        popularityContextAppStoreIDProvider: @escaping @MainActor @Sendable () -> Int64? = { nil },
+        appleAdsWebSessionProvider: @escaping @MainActor @Sendable () -> AppleAdsWebSession? = { nil }
+    ) throws {
         container = try ModelContainerFactory.makeModelContainer(isStoredInMemoryOnly: true)
         modelContext = ModelContext(container)
         let backgroundModelStore = BackgroundModelStore(modelContainer: container)
@@ -289,6 +378,9 @@ private struct ServerTestContext {
             httpClient: MockHTTPClient { request in
                 (Data(), makeHTTPURLResponse(url: request.url!, statusCode: 200))
             },
+            keywordMetricsService: keywordMetricsService,
+            popularityContextAppStoreIDProvider: popularityContextAppStoreIDProvider,
+            appleAdsWebSessionProvider: appleAdsWebSessionProvider,
             now: { ISO8601DateFormatter().date(from: "2026-05-07T12:00:00Z")! }
         )
     }
@@ -306,6 +398,17 @@ private struct ServerTestContext {
         let trackedApp = TrackedApp(appStoreID: appStoreID, storeApp: storeApp)
         modelContext.insert(storeApp)
         modelContext.insert(trackedApp)
+        try modelContext.save()
+    }
+
+    func insertTrackedKeyword(appStoreID: Int64, term: String, storefront: String = "us") throws {
+        let trackedApp = try #require(try modelContext.fetch(FetchDescriptor<TrackedApp>(
+            predicate: #Predicate { $0.appStoreID == appStoreID }
+        )).first)
+        let query = try KeywordQuery.fetchOrInsert(term: term, storefront: storefront, platform: .iphone, in: modelContext)
+        let track = TrackedAppKeyword(term: term, storefront: storefront, platform: .iphone, trackedApp: trackedApp, query: query)
+        trackedApp.keywordTracks.append(track)
+        modelContext.insert(track)
         try modelContext.save()
     }
 }

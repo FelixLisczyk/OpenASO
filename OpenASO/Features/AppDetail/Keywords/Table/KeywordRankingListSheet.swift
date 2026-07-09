@@ -1471,7 +1471,9 @@ private struct KeywordRankingScreenshotExportSummary {
     let skippedAppCount: Int
 }
 
-private final class KeywordRankingScreenshotExportService {
+// Sendable because an instance is captured by the `Task { ... }` closure in
+// startTopTenScreenshotDownload() below, which strict concurrency requires.
+private final class KeywordRankingScreenshotExportService: Sendable {
     private let downloader: ScreenshotDownloadService
 
     init(downloader: ScreenshotDownloadService) {

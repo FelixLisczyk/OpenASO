@@ -126,6 +126,28 @@ struct AppServicesDependencyTests {
     }
 
     @Test
+    func webSessionStoreRecoversAfterTransientKeychainReadFailureAndMemoizesSuccess() throws {
+        let defaults = Self.makeDefaults()
+        let keychain = InMemoryKeychainService()
+
+        let seedStore = AppleAdsWebSessionStore(defaults: defaults, keychain: keychain)
+        let session = AppleAdsWebSession(cookieHeader: "cookie=value; XSRF-TOKEN-CM=token", xsrfToken: "token", updatedAt: .now)
+        try seedStore.save(session)
+
+        keychain.failNextReads(1)
+        let storeUnderTest = AppleAdsWebSessionStore(defaults: defaults, keychain: keychain)
+
+        #expect(storeUnderTest.session == nil)
+        #expect(keychain.dataCallCount == 1)
+
+        #expect(storeUnderTest.session == session)
+        #expect(keychain.dataCallCount == 2)
+
+        _ = storeUnderTest.session
+        #expect(keychain.dataCallCount == 2)
+    }
+
+    @Test
     func cmPopularityClientBatchesTermsAtOneHundred() async throws {
         struct RequestBody: Decodable {
             let storefronts: [String]
