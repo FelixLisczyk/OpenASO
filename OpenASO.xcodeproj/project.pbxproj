@@ -52,10 +52,9 @@
 		453E1E4BE015A629E5B3F7B5 /* Storefront/StorefrontCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B399F08A360281DA901E4457 /* Storefront/StorefrontCatalog.swift */; };
 		4D4350544553545300000002 /* OpenASOMCPServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D4350544553545300000001 /* OpenASOMCPServiceTests.swift */; };
 		4D4350545345525600000002 /* OpenASOMCPServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D4350545345525600000001 /* OpenASOMCPServerTests.swift */; };
-		E52B0F8A3B0E81DF48879D42 /* OpenASOMCPRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F7340F44DE565F5C8F9E22 /* OpenASOMCPRuntimeTests.swift */; };
-		53F73D4F96F66D181C9C87EE /* KeychainServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267DE946595C2E3EF9E5BEAE /* KeychainServiceTests.swift */; };
 		4D4350545345525600000003 /* MCP in Frameworks */ = {isa = PBXBuildFile; productRef = C0DEFACE0000000000000109 /* MCP */; };
 		52A1A64F1D49D89D9B5DD204 /* AppPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC65F472D8AF2FC4DE4E8BD8 /* AppPlatform.swift */; };
+		53F73D4F96F66D181C9C87EE /* KeychainServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267DE946595C2E3EF9E5BEAE /* KeychainServiceTests.swift */; };
 		59E573ACDBBB76A905B92574 /* AddKeywordsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87EC021EFE3EDFB1445FFA7 /* AddKeywordsSheet.swift */; };
 		5B3ACA5345C1963D7B861055 /* SearchRanking/SearchRankingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1F48387102DE88B407695C3 /* SearchRanking/SearchRankingProvider.swift */; };
 		5FAADABB0DA1EEDB3699E66C /* SearchRanking/RankingMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 035877A6E7443B32A3980E39 /* SearchRanking/RankingMatcher.swift */; };
@@ -192,6 +191,7 @@
 		CB1733C5A8778748B70BA4FD /* AppDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 378F7AF5B5856F0183D027B4 /* AppDetailView.swift */; };
 		D30000000000000000000002 /* AppNamespace.swift in Sources */ = {isa = PBXBuildFile; fileRef = D30000000000000000000001 /* AppNamespace.swift */; };
 		D6807507E1AF0AB52CB2C7E2 /* SearchRanking/DefaultAppResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465129A02F247ED683558D8B /* SearchRanking/DefaultAppResolver.swift */; };
+		E52B0F8A3B0E81DF48879D42 /* OpenASOMCPRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F7340F44DE565F5C8F9E22 /* OpenASOMCPRuntimeTests.swift */; };
 		EF3B2BA43807572789A250A7 /* AddAppSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCCBBF8A3FABA145BF5122ED /* AddAppSheet.swift */; };
 		FC2B65186E0CA31841938E40 /* Storefront.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECBEF6240F66A5F359B09D41 /* Storefront.swift */; };
 		FE86E03B40393EF38C032A45 /* TrackedAppKeywordIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A63CBBCCA79CA32CCB5BFE4F /* TrackedAppKeywordIdentityTests.swift */; };
@@ -244,16 +244,16 @@
 		0A5C00000000000000000008 /* AppStoreWebMetadataProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStoreWebMetadataProviderTests.swift; sourceTree = "<group>"; };
 		0CC1A541B8A64AB1A36B50E5 /* AppServicesDependencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServicesDependencyTests.swift; sourceTree = "<group>"; };
 		1C1EE58C790084CF7A83CA8A /* SearchRanking/SearchModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchRanking/SearchModels.swift; sourceTree = "<group>"; };
+		267DE946595C2E3EF9E5BEAE /* KeychainServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceTests.swift; sourceTree = "<group>"; };
 		26D4B2C87FDED9CFCFA50D7D /* SearchRanking/RankingRefreshCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchRanking/RankingRefreshCoordinator.swift; sourceTree = "<group>"; };
 		2BC7973645CC5F20071230DE /* RankingRefreshCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RankingRefreshCoordinatorTests.swift; sourceTree = "<group>"; };
 		2EB55596DB73489FB40D836C /* PreviewAppDependencies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewAppDependencies.swift; sourceTree = "<group>"; };
 		378F7AF5B5856F0183D027B4 /* AppDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDetailView.swift; sourceTree = "<group>"; };
 		465129A02F247ED683558D8B /* SearchRanking/DefaultAppResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchRanking/DefaultAppResolver.swift; sourceTree = "<group>"; };
+		46F7340F44DE565F5C8F9E22 /* OpenASOMCPRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenASOMCPRuntimeTests.swift; sourceTree = "<group>"; };
 		4980369A7326B82ED173C90B /* MockHTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockHTTPClient.swift; sourceTree = "<group>"; };
 		4D4350544553545300000001 /* OpenASOMCPServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenASOMCPServiceTests.swift; sourceTree = "<group>"; };
 		4D4350545345525600000001 /* OpenASOMCPServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenASOMCPServerTests.swift; sourceTree = "<group>"; };
-		46F7340F44DE565F5C8F9E22 /* OpenASOMCPRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenASOMCPRuntimeTests.swift; sourceTree = "<group>"; };
-		267DE946595C2E3EF9E5BEAE /* KeychainServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceTests.swift; sourceTree = "<group>"; };
 		521B4EBEC0EC5B7902728E9E /* OpenASO.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenASO.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5C5530D41B3742698F02134C /* Credentials/KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Credentials/KeychainService.swift; sourceTree = "<group>"; };
 		5D89E788AED9CC1E4FD78B3D /* AppServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServices.swift; sourceTree = "<group>"; };
@@ -560,6 +560,14 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		C0DEC0DE0000000000000010 /* MCP */ = {
+			isa = PBXGroup;
+			children = (
+				C0DEC0DE0000000000000011 /* MCPServerSheet.swift */,
+			);
+			path = MCP;
+			sourceTree = "<group>";
+		};
 		C10000000000000000000001 /* AppDetail */ = {
 			isa = PBXGroup;
 			children = (
@@ -614,14 +622,6 @@
 				04E8C4E18F1A4D519C0A110D /* SettingsView.swift */,
 			);
 			path = Settings;
-			sourceTree = "<group>";
-		};
-		C0DEC0DE0000000000000010 /* MCP */ = {
-			isa = PBXGroup;
-			children = (
-				C0DEC0DE0000000000000011 /* MCPServerSheet.swift */,
-			);
-			path = MCP;
 			sourceTree = "<group>";
 		};
 		C5A400000000000000000005 /* Utilities */ = {
@@ -753,7 +753,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2630;
+				LastUpgradeCheck = 2700;
 			};
 			buildConfigurationList = A128D85B2B790211AA0A7E2E /* Build configuration list for PBXProject "OpenASO" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -1059,9 +1059,10 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 85BF4D5D6B;
+				DEVELOPMENT_TEAM = 7T8DYS43CJ;
+				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenASO/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "OpenASO Dev";
@@ -1078,7 +1079,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.3.2;
+				MARKETING_VERSION = 0.3.3;
 				POSTHOG_HOST = "";
 				POSTHOG_PROJECT_TOKEN = "";
 				PRODUCT_BUNDLE_IDENTIFIER = com.thirdtech.openaso.dev;
@@ -1288,9 +1289,9 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 85BF4D5D6B;
+				DEVELOPMENT_TEAM = 7T8DYS43CJ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenASO/Info.plist;
@@ -1308,7 +1309,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.3.2;
+				MARKETING_VERSION = 0.3.3;
 				POSTHOG_HOST = "";
 				POSTHOG_PROJECT_TOKEN = "";
 				PRODUCT_BUNDLE_IDENTIFIER = com.thirdtech.openaso;
