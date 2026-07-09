@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import Security
 
 protocol KeychainService {
@@ -8,6 +9,10 @@ protocol KeychainService {
 }
 
 struct SystemKeychainService: KeychainService {
+    // Hardcoded rather than Bundle.main.bundleIdentifier so logs are filterable consistently
+    // from both the GUI app and the --mcp-stdio CLI process, where Bundle.main.bundleIdentifier may be nil.
+    private static let logger = Logger(subsystem: "com.thirdtech.openaso", category: "keychain")
+
     func data(service: String, account: String) -> Data? {
         var query = keychainQuery(service: service, account: account)
         query[kSecReturnData as String] = true
@@ -19,10 +24,20 @@ struct SystemKeychainService: KeychainService {
             status == errSecSuccess,
             let data = item as? Data
         else {
+            logReadFailure(status: status, service: service, account: account)
             return nil
         }
 
         return data
+    }
+
+    private func logReadFailure(status: OSStatus, service: String, account: String) {
+        let description = SecCopyErrorMessageString(status, nil).map { String($0) } ?? "unknown error"
+        if status == errSecItemNotFound {
+            Self.logger.info("Keychain item not found for \(service, privacy: .public)/\(account, privacy: .public): \(status) (\(description, privacy: .public))")
+        } else {
+            Self.logger.error("Keychain read failed for \(service, privacy: .public)/\(account, privacy: .public): \(status) (\(description, privacy: .public))")
+        }
     }
 
     func save(_ data: Data, service: String, account: String) throws {
@@ -63,9 +78,16 @@ struct SystemKeychainService: KeychainService {
 
 final class InMemoryKeychainService: KeychainService {
     private var storage: [Key: Data] = [:]
+    private var remainingReadFailures = 0
+    private(set) var dataCallCount = 0
 
     func data(service: String, account: String) -> Data? {
-        storage[Key(service: service, account: account)]
+        dataCallCount += 1
+        guard remainingReadFailures == 0 else {
+            remainingReadFailures -= 1
+            return nil
+        }
+        return storage[Key(service: service, account: account)]
     }
 
     func save(_ data: Data, service: String, account: String) throws {
@@ -74,6 +96,12 @@ final class InMemoryKeychainService: KeychainService {
 
     func delete(service: String, account: String) {
         storage.removeValue(forKey: Key(service: service, account: account))
+    }
+
+    /// Makes the next `count` calls to `data(service:account:)` return `nil`, simulating a
+    /// transient Keychain read failure, regardless of what was saved.
+    func failNextReads(_ count: Int) {
+        remainingReadFailures = count
     }
 
     private struct Key: Hashable {

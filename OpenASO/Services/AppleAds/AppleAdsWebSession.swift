@@ -53,7 +53,7 @@ final class AppleAdsWebSessionStore {
     private let keychainService: String
     private let sessionAccount = "web-session"
 
-    private(set) var session: AppleAdsWebSession?
+    private var cachedSession: AppleAdsWebSession?
 
     init(
         defaults: UserDefaults = .openASOShared,
@@ -63,9 +63,17 @@ final class AppleAdsWebSessionStore {
         self.keychainItemPresence = KeychainItemPresenceStore(defaults: defaults)
         self.keychain = keychain
         self.keychainService = namespace.keychainService("apple-ads-web")
-        session = keychainItemPresence.contains(service: keychainService, account: sessionAccount)
-            ? Self.readSession(service: keychainService, account: sessionAccount, keychain: keychain)
-            : nil
+    }
+
+    // A cache miss re-reads Keychain on every access rather than latching `nil` forever, so a
+    // transient read failure (e.g. at launch) can recover once Keychain becomes reachable again.
+    var session: AppleAdsWebSession? {
+        if let cachedSession {
+            return cachedSession
+        }
+        let session = Self.readSession(service: keychainService, account: sessionAccount, keychain: keychain)
+        cachedSession = session
+        return session
     }
 
     var hasSession: Bool {
@@ -77,7 +85,7 @@ final class AppleAdsWebSessionStore {
         do {
             try keychain.save(data, service: keychainService, account: sessionAccount)
             keychainItemPresence.markPresent(service: keychainService, account: sessionAccount)
-            self.session = session
+            cachedSession = session
         } catch {
             throw OpenASOError.providerUnavailable("Could not save Apple Ads web session to Keychain.")
         }
@@ -86,7 +94,7 @@ final class AppleAdsWebSessionStore {
     func clear() {
         keychain.delete(service: keychainService, account: sessionAccount)
         keychainItemPresence.markAbsent(service: keychainService, account: sessionAccount)
-        session = nil
+        cachedSession = nil
     }
 
     private static func readSession(
