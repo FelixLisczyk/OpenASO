@@ -91,6 +91,31 @@ struct OpenASOMCPRuntimeTests {
         let tools = try await client.listTools().tools
         #expect(tools.map(\.name).contains("refresh_keyword_metrics"))
     }
+
+    // Matches OpenASOApp.runMCPStdioAndExit()'s production shape (Task.detached -> dispatchMain()),
+    // which is where the original actor-hop deadlock occurred. .timeLimit fails the test rather
+    // than hanging CI forever if a future refactor reintroduces the deadlock.
+    @Test(.timeLimit(.minutes(1)))
+    func makeServerDoesNotDeadlockWhenInvokedFromTaskDetachedContext() async throws {
+        let server = try await Task.detached {
+            try await OpenASOMCPRuntime.makeServer(isStoredInMemoryOnly: true)
+        }.value
+
+        let client = Client(name: "OpenASO MCP Runtime Detached Test Client", version: "1.0")
+        let transports = await InMemoryTransport.createConnectedPair()
+
+        try await server.start(transport: transports.server)
+        defer {
+            Task {
+                await client.disconnect()
+                await server.stop()
+            }
+        }
+
+        _ = try await client.connect(transport: transports.client)
+        let tools = try await client.listTools().tools
+        #expect(tools.map(\.name).contains("refresh_keyword_metrics"))
+    }
 }
 
 @MainActor
