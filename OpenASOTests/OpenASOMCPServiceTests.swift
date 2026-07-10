@@ -1028,6 +1028,48 @@ struct OpenASOMCPServiceTests {
     }
 
     @Test
+    func refreshKeywordMetricsClearsStalePopularityStatusMessageOnFreshnessSkip() async throws {
+        let context = try MCPTestContext(includeKeywordMetricsService: true)
+        try context.insertTrackedApp(appStoreID: 123, name: "Cal AI")
+        _ = try await context.service.addKeywords(
+            appStoreID: 123,
+            keywords: ["calorie tracker"],
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+        let tracks = try context.modelContext.fetch(FetchDescriptor<TrackedAppKeyword>())
+        let track = try #require(tracks.first)
+        track.statusMessage = "Popularity failed to fetch. Connect an Apple Ads web session in Settings."
+        context.modelContext.insert(KeywordDailyMetric(
+            queryKey: track.queryKey,
+            keyword: track.term,
+            storefront: track.storefront,
+            platform: track.platform,
+            popularityScore: 42,
+            difficultyScore: nil,
+            source: .appleAdsPopularity,
+            updatedAt: Date()
+        ))
+        try context.modelContext.save()
+
+        let metricsRefresh = try await context.service.refreshKeywordMetrics(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        #expect(metricsRefresh.outcomes.first?.error == nil)
+        #expect(metricsRefresh.outcomes.first?.track.statusMessage == nil)
+        #expect(metricsRefresh.outcomes.first?.track.popularityScore == 42)
+
+        let persistedStatusMessage = try await context.backgroundModelStore.read { modelContext in
+            let tracks = try modelContext.fetch(FetchDescriptor<TrackedAppKeyword>())
+            return tracks.first?.statusMessage
+        }
+        #expect(persistedStatusMessage == nil)
+    }
+
+    @Test
     func derivedCompetitorsCanRefreshBoundedReviewsAndExportScreenshots() async throws {
         let rankingProvider = StubMCPRankingProvider(pages: [
             "calorie tracker::us::iphone": SearchRankingPage(items: [

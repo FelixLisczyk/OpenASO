@@ -63,6 +63,7 @@ final class KeywordMetricsService: Sendable {
 
         for track in uniqueTracks.values {
             guard Self.shouldRefreshMetrics(metricsTTL: metricsTTL, for: track.queryKey, in: modelContext) else {
+                Self.clearPopularityStatusIfNeeded(for: track)
                 outcomes.append(KeywordMetricsRefreshOutcome(trackID: track.persistentModelID, errorMessage: nil))
                 continue
             }
@@ -138,13 +139,15 @@ final class KeywordMetricsService: Sendable {
                         metricsTTL: metricsTTL,
                         for: track.queryKey,
                         in: modelContext
-                    )
+                    ),
+                    statusMessage: track.statusMessage
                 )
             }
         }
 
         var outcomes: [KeywordMetricsRefreshOutcome] = []
         var tracksNeedingPopularity: [KeywordMetricsRefreshCandidate] = []
+        var staleStatusMessageClearCandidates: [(identityKey: String, statusMessage: String)] = []
         let totalCount = candidates.count
         var completedCount = 0
         var failureCount = 0
@@ -152,6 +155,9 @@ final class KeywordMetricsService: Sendable {
 
         for candidate in candidates {
             guard candidate.shouldRefresh else {
+                if let statusMessage = candidate.statusMessage, Self.isPopularityStatusMessage(statusMessage) {
+                    staleStatusMessageClearCandidates.append((candidate.trackIdentityKey, statusMessage))
+                }
                 outcomes.append(KeywordMetricsRefreshOutcome(trackID: candidate.trackID, errorMessage: nil))
                 completedCount += 1
                 await progress?(completedCount, totalCount, failureCount)
@@ -172,6 +178,19 @@ final class KeywordMetricsService: Sendable {
             }
 
             tracksNeedingPopularity.append(candidate)
+        }
+
+        if !staleStatusMessageClearCandidates.isEmpty {
+            let staleStatusMessageClearCandidates = staleStatusMessageClearCandidates
+            try await modelStore.write { modelContext in
+                for clearCandidate in staleStatusMessageClearCandidates {
+                    try Self.clearStalePopularityStatusIfUnchanged(
+                        identityKey: clearCandidate.identityKey,
+                        snapshotStatusMessage: clearCandidate.statusMessage,
+                        in: modelContext
+                    )
+                }
+            }
         }
 
         guard let popularityContextAppStoreID else {
@@ -290,6 +309,26 @@ final class KeywordMetricsService: Sendable {
                 in: modelContext
             )
         }
+    }
+
+    private static func clearStalePopularityStatusIfUnchanged(
+        identityKey: String,
+        snapshotStatusMessage: String,
+        in modelContext: ModelContext
+    ) throws {
+        let targetIdentityKey = identityKey
+        let descriptor = FetchDescriptor<TrackedAppKeyword>(
+            predicate: #Predicate { track in
+                track.identityKey == targetIdentityKey
+            }
+        )
+        guard let track = try modelContext.fetch(descriptor).first,
+            track.statusMessage == snapshotStatusMessage
+        else {
+            return
+        }
+
+        track.statusMessage = nil
     }
 
     private static func applyPopularityResult(
@@ -416,21 +455,21 @@ final class KeywordMetricsService: Sendable {
                 popularityScore: nil,
                 difficultyScore: nil,
                 source: .appleAdsPopularity,
-                statusMessage: "Popularity failed to fetch. Connect an Apple Ads web session in Settings."
+                statusMessage: "\(popularityFailedToFetchPrefix) Connect an Apple Ads web session in Settings."
             )
         case .missingContextApp:
             return KeywordMetricsPayload(
                 popularityScore: nil,
                 difficultyScore: nil,
                 source: .appleAdsPopularity,
-                statusMessage: "Popularity failed to fetch. Reconnect Apple Ads in Settings so OpenASO can detect a linked app."
+                statusMessage: "\(popularityFailedToFetchPrefix) Reconnect Apple Ads in Settings so OpenASO can detect a linked app."
             )
         case .notFound:
             return KeywordMetricsPayload(
                 popularityScore: nil,
                 difficultyScore: nil,
                 source: .appleAdsPopularity,
-                statusMessage: "Popularity failed to fetch. Apple Ads returned no popularity for this keyword using the configured popularity app."
+                statusMessage: "\(popularityFailedToFetchPrefix) Apple Ads returned no popularity for this keyword using the configured popularity app."
             )
         case .failure(let message):
             if isUnsupportedAppleAdsStorefrontMessage(message) {
@@ -438,7 +477,7 @@ final class KeywordMetricsService: Sendable {
                     popularityScore: nil,
                     difficultyScore: nil,
                     source: .appleAdsPopularity,
-                    statusMessage: "Popularity unavailable. \(message)"
+                    statusMessage: "\(popularityUnavailablePrefix) \(message)"
                 )
             }
 
@@ -446,7 +485,7 @@ final class KeywordMetricsService: Sendable {
                 popularityScore: nil,
                 difficultyScore: nil,
                 source: .appleAdsPopularity,
-                statusMessage: "Popularity failed to fetch. \(message)"
+                statusMessage: "\(popularityFailedToFetchPrefix) \(message)"
             )
         }
 
@@ -465,13 +504,17 @@ final class KeywordMetricsService: Sendable {
     }
 
     private static func clearPopularityStatusIfNeeded(for track: TrackedAppKeyword) {
-        guard track.statusMessage?.hasPrefix("Popularity failed to fetch.") == true
-            || track.statusMessage?.hasPrefix("Popularity unavailable.") == true
-        else {
-            return
-        }
-
+        guard isPopularityStatusMessage(track.statusMessage) else { return }
         track.statusMessage = nil
+    }
+
+    static let popularityFailedToFetchPrefix = "Popularity failed to fetch."
+    static let popularityUnavailablePrefix = "Popularity unavailable."
+
+    static func isPopularityStatusMessage(_ statusMessage: String?) -> Bool {
+        guard let statusMessage else { return false }
+        return statusMessage.hasPrefix(popularityFailedToFetchPrefix)
+            || statusMessage.hasPrefix(popularityUnavailablePrefix)
     }
 }
 
@@ -486,6 +529,7 @@ private struct KeywordMetricsRefreshCandidate: Sendable {
     let term: String
     let storefront: String
     let shouldRefresh: Bool
+    let statusMessage: String?
 }
 
 private struct KeywordMetricsPayload: Sendable {
