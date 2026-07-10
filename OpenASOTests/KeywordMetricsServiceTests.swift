@@ -716,6 +716,52 @@ struct KeywordMetricsServiceTests {
     }
 
     @Test
+    func identityKeyOverloadClearsStaleStatusEvenWithoutConfiguredContextApp() async throws {
+        let container = try ModelContainerFactory.makeModelContainer(isStoredInMemoryOnly: true)
+        let modelContext = ModelContext(container)
+        let services = AppServices.mocked(
+            httpClient: MockHTTPClient { request in
+                Issue.record("Unexpected request to \(request.url?.absoluteString ?? "unknown URL")")
+                throw OpenASOError.providerUnavailable("Unexpected request")
+            },
+            modelContainer: container
+        )
+
+        let trackedApp = TrackedApp(appStoreID: 1, bundleID: nil, name: "App", sellerName: nil, defaultPlatform: .iphone)
+        modelContext.insert(trackedApp)
+        let track = try makeTrack(term: "focus app", trackedApp: trackedApp, in: modelContext)
+        track.statusMessage = "Popularity failed to fetch. Connect an Apple Ads web session in Settings."
+        let freshUpdatedAt = try #require(Calendar.current.date(byAdding: .day, value: -1, to: .now))
+        modelContext.insert(
+            KeywordDailyMetric(
+                queryKey: track.queryKey,
+                keyword: track.term,
+                storefront: track.storefront,
+                platform: track.platform,
+                popularityScore: 55,
+                difficultyScore: nil,
+                source: .appleAdsPopularity,
+                updatedAt: freshUpdatedAt
+            )
+        )
+        try modelContext.save()
+
+        let backgroundModelStore = try #require(services.backgroundModelStore)
+        let outcomes = try await services.keywordMetricsService.refreshMetrics(
+            for: [track.identityKey],
+            popularityContextAppStoreID: nil,
+            webSession: nil,
+            using: backgroundModelStore
+        )
+
+        #expect(outcomes.first?.errorMessage == nil)
+        let persistedStatusMessage = try await backgroundModelStore.read { modelContext in
+            try modelContext.fetch(FetchDescriptor<TrackedAppKeyword>()).first?.statusMessage
+        }
+        #expect(persistedStatusMessage == nil)
+    }
+
+    @Test
     func identityKeyOverloadMixedBatchClearsStaleStatusWithoutAffectingRealFetchCandidate() async throws {
         let container = try ModelContainerFactory.makeModelContainer(isStoredInMemoryOnly: true)
         let modelContext = ModelContext(container)
