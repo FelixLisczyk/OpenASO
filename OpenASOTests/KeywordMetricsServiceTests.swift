@@ -494,6 +494,319 @@ struct KeywordMetricsServiceTests {
         #expect(storedMetrics.first?.popularityScore == 41)
     }
 
+    @Test(arguments: [
+        "Popularity failed to fetch. Connect an Apple Ads web session in Settings.",
+        "Popularity unavailable. Apple Ads keyword popularity is not available for this storefront.",
+    ])
+    func freshnessSkipClearsStalePopularityStatusMessage(staleStatusMessage: String) async throws {
+        let container = try ModelContainerFactory.makeModelContainer(isStoredInMemoryOnly: true)
+        let modelContext = ModelContext(container)
+        let services = AppServices.mocked(
+            httpClient: MockHTTPClient { request in
+                Issue.record("Unexpected request to \(request.url?.absoluteString ?? "unknown URL")")
+                throw OpenASOError.providerUnavailable("Unexpected request")
+            },
+            modelContainer: container
+        )
+        services.settingsStore.savePopularityContextAppStoreID(123_456_789)
+
+        let trackedApp = TrackedApp(appStoreID: 1, bundleID: nil, name: "App", sellerName: nil, defaultPlatform: .iphone)
+        modelContext.insert(trackedApp)
+        let track = try makeTrack(term: "focus app", trackedApp: trackedApp, in: modelContext)
+        track.statusMessage = staleStatusMessage
+        let freshUpdatedAt = try #require(Calendar.current.date(byAdding: .day, value: -1, to: .now))
+        let metrics = KeywordDailyMetric(
+            queryKey: track.queryKey,
+            keyword: track.term,
+            storefront: track.storefront,
+            platform: track.platform,
+            popularityScore: 55,
+            difficultyScore: nil,
+            source: .appleAdsPopularity,
+            updatedAt: freshUpdatedAt
+        )
+        modelContext.insert(metrics)
+        try modelContext.save()
+
+        let outcomes = await services.keywordMetricsService.refreshMetrics(for: trackedApp, tracks: [track], in: modelContext)
+
+        #expect(outcomes.first?.errorMessage == nil)
+        #expect(track.statusMessage == nil)
+        #expect(metrics.popularityScore == 55)
+        #expect(metrics.updatedAt == freshUpdatedAt)
+    }
+
+    @Test
+    func freshnessSkipLeavesRankingStatusMessageUntouched() async throws {
+        let container = try ModelContainerFactory.makeModelContainer(isStoredInMemoryOnly: true)
+        let modelContext = ModelContext(container)
+        let services = AppServices.mocked(
+            httpClient: MockHTTPClient { request in
+                Issue.record("Unexpected request to \(request.url?.absoluteString ?? "unknown URL")")
+                throw OpenASOError.providerUnavailable("Unexpected request")
+            },
+            modelContainer: container
+        )
+        services.settingsStore.savePopularityContextAppStoreID(123_456_789)
+
+        let trackedApp = TrackedApp(appStoreID: 1, bundleID: nil, name: "App", sellerName: nil, defaultPlatform: .iphone)
+        modelContext.insert(trackedApp)
+        let track = try makeTrack(term: "focus app", trackedApp: trackedApp, in: modelContext)
+        let rankingStatusMessage = "Ranking failed to refresh. App Store search returned no results."
+        track.statusMessage = rankingStatusMessage
+        let freshUpdatedAt = try #require(Calendar.current.date(byAdding: .day, value: -1, to: .now))
+        let metrics = KeywordDailyMetric(
+            queryKey: track.queryKey,
+            keyword: track.term,
+            storefront: track.storefront,
+            platform: track.platform,
+            popularityScore: 55,
+            difficultyScore: nil,
+            source: .appleAdsPopularity,
+            updatedAt: freshUpdatedAt
+        )
+        modelContext.insert(metrics)
+        try modelContext.save()
+
+        let outcomes = await services.keywordMetricsService.refreshMetrics(for: trackedApp, tracks: [track], in: modelContext)
+
+        #expect(outcomes.first?.errorMessage == nil)
+        #expect(track.statusMessage == rankingStatusMessage)
+    }
+
+    @Test(arguments: [
+        "Popularity failed to fetch. Connect an Apple Ads web session in Settings.",
+        "Popularity unavailable. Apple Ads keyword popularity is not available for this storefront.",
+    ])
+    func identityKeyOverloadFreshnessSkipClearsStalePopularityStatusMessage(staleStatusMessage: String) async throws {
+        let container = try ModelContainerFactory.makeModelContainer(isStoredInMemoryOnly: true)
+        let modelContext = ModelContext(container)
+        let services = AppServices.mocked(
+            httpClient: MockHTTPClient { request in
+                Issue.record("Unexpected request to \(request.url?.absoluteString ?? "unknown URL")")
+                throw OpenASOError.providerUnavailable("Unexpected request")
+            },
+            modelContainer: container
+        )
+
+        let trackedApp = TrackedApp(appStoreID: 1, bundleID: nil, name: "App", sellerName: nil, defaultPlatform: .iphone)
+        modelContext.insert(trackedApp)
+        let track = try makeTrack(term: "focus app", trackedApp: trackedApp, in: modelContext)
+        track.statusMessage = staleStatusMessage
+        let freshUpdatedAt = try #require(Calendar.current.date(byAdding: .day, value: -1, to: .now))
+        modelContext.insert(
+            KeywordDailyMetric(
+                queryKey: track.queryKey,
+                keyword: track.term,
+                storefront: track.storefront,
+                platform: track.platform,
+                popularityScore: 55,
+                difficultyScore: nil,
+                source: .appleAdsPopularity,
+                updatedAt: freshUpdatedAt
+            )
+        )
+        try modelContext.save()
+
+        let backgroundModelStore = try #require(services.backgroundModelStore)
+        let outcomes = try await services.keywordMetricsService.refreshMetrics(
+            for: [track.identityKey],
+            popularityContextAppStoreID: 123_456_789,
+            webSession: nil,
+            using: backgroundModelStore
+        )
+
+        #expect(outcomes.first?.errorMessage == nil)
+        let persistedStatusMessage = try await backgroundModelStore.read { modelContext in
+            try modelContext.fetch(FetchDescriptor<TrackedAppKeyword>()).first?.statusMessage
+        }
+        #expect(persistedStatusMessage == nil)
+    }
+
+    @Test
+    func identityKeyOverloadFreshnessSkipLeavesRankingStatusMessageUntouched() async throws {
+        let container = try ModelContainerFactory.makeModelContainer(isStoredInMemoryOnly: true)
+        let modelContext = ModelContext(container)
+        let services = AppServices.mocked(
+            httpClient: MockHTTPClient { request in
+                Issue.record("Unexpected request to \(request.url?.absoluteString ?? "unknown URL")")
+                throw OpenASOError.providerUnavailable("Unexpected request")
+            },
+            modelContainer: container
+        )
+
+        let trackedApp = TrackedApp(appStoreID: 1, bundleID: nil, name: "App", sellerName: nil, defaultPlatform: .iphone)
+        modelContext.insert(trackedApp)
+        let track = try makeTrack(term: "focus app", trackedApp: trackedApp, in: modelContext)
+        let rankingStatusMessage = "Ranking failed to refresh. App Store search returned no results."
+        track.statusMessage = rankingStatusMessage
+        let freshUpdatedAt = try #require(Calendar.current.date(byAdding: .day, value: -1, to: .now))
+        modelContext.insert(
+            KeywordDailyMetric(
+                queryKey: track.queryKey,
+                keyword: track.term,
+                storefront: track.storefront,
+                platform: track.platform,
+                popularityScore: 55,
+                difficultyScore: nil,
+                source: .appleAdsPopularity,
+                updatedAt: freshUpdatedAt
+            )
+        )
+        try modelContext.save()
+
+        let backgroundModelStore = try #require(services.backgroundModelStore)
+        let outcomes = try await services.keywordMetricsService.refreshMetrics(
+            for: [track.identityKey],
+            popularityContextAppStoreID: 123_456_789,
+            webSession: nil,
+            using: backgroundModelStore
+        )
+
+        #expect(outcomes.first?.errorMessage == nil)
+        let persistedStatusMessage = try await backgroundModelStore.read { modelContext in
+            try modelContext.fetch(FetchDescriptor<TrackedAppKeyword>()).first?.statusMessage
+        }
+        #expect(persistedStatusMessage == rankingStatusMessage)
+    }
+
+    @Test
+    func identityKeyOverloadCleanBatchPerformsNoMutation() async throws {
+        let container = try ModelContainerFactory.makeModelContainer(isStoredInMemoryOnly: true)
+        let modelContext = ModelContext(container)
+        let services = AppServices.mocked(
+            httpClient: MockHTTPClient { request in
+                Issue.record("Unexpected request to \(request.url?.absoluteString ?? "unknown URL")")
+                throw OpenASOError.providerUnavailable("Unexpected request")
+            },
+            modelContainer: container
+        )
+
+        let trackedApp = TrackedApp(appStoreID: 1, bundleID: nil, name: "App", sellerName: nil, defaultPlatform: .iphone)
+        modelContext.insert(trackedApp)
+        let track = try makeTrack(term: "focus app", trackedApp: trackedApp, in: modelContext)
+        let freshUpdatedAt = try #require(Calendar.current.date(byAdding: .day, value: -1, to: .now))
+        modelContext.insert(
+            KeywordDailyMetric(
+                queryKey: track.queryKey,
+                keyword: track.term,
+                storefront: track.storefront,
+                platform: track.platform,
+                popularityScore: 55,
+                difficultyScore: nil,
+                source: .appleAdsPopularity,
+                updatedAt: freshUpdatedAt
+            )
+        )
+        try modelContext.save()
+
+        let backgroundModelStore = try #require(services.backgroundModelStore)
+        let outcomes = try await services.keywordMetricsService.refreshMetrics(
+            for: [track.identityKey],
+            popularityContextAppStoreID: 123_456_789,
+            webSession: nil,
+            using: backgroundModelStore
+        )
+
+        #expect(outcomes.first?.errorMessage == nil)
+        let persistedStatusMessage = try await backgroundModelStore.read { modelContext in
+            try modelContext.fetch(FetchDescriptor<TrackedAppKeyword>()).first?.statusMessage
+        }
+        #expect(persistedStatusMessage == nil)
+    }
+
+    @Test
+    func identityKeyOverloadMixedBatchClearsStaleStatusWithoutAffectingRealFetchCandidate() async throws {
+        let container = try ModelContainerFactory.makeModelContainer(isStoredInMemoryOnly: true)
+        let modelContext = ModelContext(container)
+        var requestedTerms: [String] = []
+        let services = AppServices.mocked(
+            httpClient: MockHTTPClient { request in
+                let body = try #require(request.httpBody)
+                let payload = try JSONDecoder().decode(KeywordPopularityRequestBody.self, from: body)
+                requestedTerms.append(contentsOf: payload.terms)
+
+                let response = """
+                {
+                  "status": "success",
+                  "data": [
+                    {"name": "stale", "popularity": 67}
+                  ]
+                }
+                """
+                return (
+                    Data(response.utf8),
+                    makeHTTPURLResponse(url: try #require(request.url), statusCode: 200)
+                )
+            },
+            modelContainer: container
+        )
+
+        let trackedApp = TrackedApp(appStoreID: 1, bundleID: nil, name: "App", sellerName: nil, defaultPlatform: .iphone)
+        modelContext.insert(trackedApp)
+        let skipTrack = try makeTrack(term: "fresh", trackedApp: trackedApp, in: modelContext)
+        skipTrack.statusMessage = "Popularity failed to fetch. Connect an Apple Ads web session in Settings."
+        let fetchTrack = try makeTrack(term: "stale", trackedApp: trackedApp, in: modelContext)
+        let freshUpdatedAt = try #require(Calendar.current.date(byAdding: .day, value: -1, to: .now))
+        let staleUpdatedAt = try #require(Calendar.current.date(byAdding: .day, value: -8, to: .now))
+        modelContext.insert(
+            KeywordDailyMetric(
+                queryKey: skipTrack.queryKey,
+                keyword: skipTrack.term,
+                storefront: skipTrack.storefront,
+                platform: skipTrack.platform,
+                popularityScore: 55,
+                difficultyScore: nil,
+                source: .appleAdsPopularity,
+                updatedAt: freshUpdatedAt
+            )
+        )
+        modelContext.insert(
+            KeywordDailyMetric(
+                queryKey: fetchTrack.queryKey,
+                keyword: fetchTrack.term,
+                storefront: fetchTrack.storefront,
+                platform: fetchTrack.platform,
+                popularityScore: 12,
+                difficultyScore: nil,
+                source: .appleAdsPopularity,
+                updatedAt: staleUpdatedAt
+            )
+        )
+        try modelContext.save()
+
+        let backgroundModelStore = try #require(services.backgroundModelStore)
+        let progressRecorder = ProgressRecorder()
+        let outcomes = try await services.keywordMetricsService.refreshMetrics(
+            for: [skipTrack.identityKey, fetchTrack.identityKey],
+            popularityContextAppStoreID: 123_456_789,
+            webSession: AppleAdsWebSession(cookieHeader: "cookie=value; XSRF-TOKEN-CM=token", xsrfToken: "token", updatedAt: .now),
+            using: backgroundModelStore,
+            progress: { completed, total, failures in
+                await progressRecorder.record(completed: completed, total: total, failures: failures)
+            }
+        )
+        let progressTicks = await progressRecorder.ticks
+
+        #expect(Set(requestedTerms) == ["stale"])
+        #expect(outcomes.count == 2)
+        #expect(progressTicks.last?.completed == 2)
+        #expect(progressTicks.last?.total == 2)
+        #expect(progressTicks.last?.failures == 0)
+
+        let persistedStatusMessages = try await backgroundModelStore.read { modelContext in
+            let tracks = try modelContext.fetch(FetchDescriptor<TrackedAppKeyword>())
+            return Dictionary(uniqueKeysWithValues: tracks.map { ($0.term, $0.statusMessage) })
+        }
+        let freshTrackStatusMessage = try #require(persistedStatusMessages["fresh"])
+        #expect(freshTrackStatusMessage == nil)
+        let persistedFetchPopularityScore = try await backgroundModelStore.read { modelContext in
+            let metrics = try modelContext.fetch(FetchDescriptor<KeywordDailyMetric>())
+            return metrics.first { $0.keyword == "stale" }?.popularityScore
+        }
+        #expect(persistedFetchPopularityScore == 67)
+    }
+
     private func makeRow(
         term: String,
         trackedApp: TrackedApp,
@@ -544,6 +857,14 @@ struct KeywordMetricsServiceTests {
 
     private struct KeywordPopularityRequestBody: Decodable {
         let terms: [String]
+    }
+
+    private actor ProgressRecorder {
+        private(set) var ticks: [(completed: Int, total: Int, failures: Int)] = []
+
+        func record(completed: Int, total: Int, failures: Int) {
+            ticks.append((completed, total, failures))
+        }
     }
 
     private static let privateKey = """
