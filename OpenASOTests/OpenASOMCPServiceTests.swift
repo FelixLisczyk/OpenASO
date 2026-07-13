@@ -985,6 +985,31 @@ struct OpenASOMCPServiceTests {
     }
 
     @Test
+    func refreshKeywordRankingsBreaksAllNilTieByIdentityKeyOrdering() async throws {
+        let rankingProvider = StubMCPRankingProvider(pages: [:])
+        let context = try MCPTestContext(rankingProvider: rankingProvider)
+        try context.insertTrackedApp(appStoreID: 123, name: "Cal AI")
+        _ = try await context.service.addKeywords(
+            appStoreID: 123,
+            keywords: ["beta tracker", "alpha tracker"],
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        let refresh = try await context.service.refreshKeywordRankings(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone",
+            limit: 1
+        )
+
+        #expect(refresh.summary.refreshed == 1)
+        #expect(await rankingProvider.searchedKeysSnapshot() == [
+            TrackedAppKeyword.makeQueryKey(term: "alpha tracker", storefront: "us", platform: .iphone)
+        ])
+    }
+
+    @Test
     func refreshKeywordRankingsRepeatedCallsCumulativelyCoverTrackedSetBeyondDefaultLimit() async throws {
         let rankingProvider = StubMCPRankingProvider(pages: [:])
         let context = try MCPTestContext(rankingProvider: rankingProvider)
@@ -1067,6 +1092,30 @@ struct OpenASOMCPServiceTests {
             platform: "iphone"
         )
         #expect(refreshWithOmittedLimit.notes.isEmpty)
+    }
+
+    @Test
+    func refreshKeywordRankingsRefreshesAllTracksInOneCallAtExactCapBoundary() async throws {
+        let rankingProvider = StubMCPRankingProvider(pages: [:])
+        let context = try MCPTestContext(rankingProvider: rankingProvider)
+        try context.insertTrackedApp(appStoreID: 123, name: "Cal AI")
+        let keywords = (1...25).map { "keyword-\($0)" }
+        _ = try await context.service.addKeywords(
+            appStoreID: 123,
+            keywords: keywords,
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        let refresh = try await context.service.refreshKeywordRankings(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone",
+            limit: 25
+        )
+
+        #expect(refresh.outcomes.count == 25)
+        #expect(refresh.notes.isEmpty)
     }
 
     @Test
