@@ -487,7 +487,7 @@ private extension OpenASOMCPServerFactory {
                 required: ["appStoreID"],
                 optional: commonAppFilters.merging(["limit": .integer, "website_markdown": .string]) { current, _ in current }
             ), readOnly: true, openWorld: true),
-            tool("refresh_keyword_rankings", "Refresh and persist rankings for tracked keywords so keyword and competitor tools share the same evidence. The limit argument caps keyword tracks refreshed.", schema(
+            tool("refresh_keyword_rankings", "Refresh and persist rankings for tracked keywords so keyword and competitor tools share the same evidence. Refreshes up to 25 tracked-keyword rankings per call (defaults to 20 if limit is omitted), prioritizing the tracks that have gone longest without a refresh — including ones never refreshed at all. Call repeatedly to cover a tracked set larger than the per-call cap; a notes message appears if a requested limit was reduced to the maximum.", schema(
                 required: ["appStoreID"],
                 optional: commonAppFilters.merging(["limit": .integer]) { current, _ in current }
             ), readOnly: false, destructive: false, idempotent: false, openWorld: true),

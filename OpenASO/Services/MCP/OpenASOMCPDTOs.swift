@@ -436,8 +436,9 @@ struct OpenASOMCPKeywordRefreshOutcome: Codable, Sendable {
 }
 
 struct OpenASOMCPKeywordRefreshResult: Codable, Sendable {
-    let summary: OpenASOMCPMutationSummary
+    let notes: [String]
     let outcomes: [OpenASOMCPKeywordRefreshOutcome]
+    let summary: OpenASOMCPMutationSummary
 }
 
 struct OpenASOMCPCompetitorReviewRefreshResult: Codable, Sendable {
