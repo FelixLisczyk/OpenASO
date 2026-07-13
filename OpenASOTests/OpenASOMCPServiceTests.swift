@@ -955,6 +955,219 @@ struct OpenASOMCPServiceTests {
     }
 
     @Test
+    func refreshKeywordRankingsPrioritizesNeverRefreshedKeywordOverAlphabeticallyEarlierOne() async throws {
+        let rankingProvider = StubMCPRankingProvider(pages: [:])
+        let context = try MCPTestContext(rankingProvider: rankingProvider)
+        try context.insertTrackedApp(appStoreID: 123, name: "Cal AI")
+        _ = try await context.service.addKeywords(
+            appStoreID: 123,
+            keywords: ["alpha tracker", "beta tracker"],
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        let tracks = try context.modelContext.fetch(FetchDescriptor<TrackedAppKeyword>())
+        let alreadyRefreshedTrack = try #require(tracks.first { $0.term == "alpha tracker" })
+        alreadyRefreshedTrack.lastRefreshAt = isoDate("2026-05-07T12:00:00Z").addingTimeInterval(-3600)
+        try context.modelContext.save()
+
+        let refresh = try await context.service.refreshKeywordRankings(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone",
+            limit: 1
+        )
+
+        #expect(refresh.summary.refreshed == 1)
+        #expect(await rankingProvider.searchedKeysSnapshot() == [
+            TrackedAppKeyword.makeQueryKey(term: "beta tracker", storefront: "us", platform: .iphone)
+        ])
+    }
+
+    @Test
+    func refreshKeywordRankingsBreaksAllNilTieByIdentityKeyOrdering() async throws {
+        let rankingProvider = StubMCPRankingProvider(pages: [:])
+        let context = try MCPTestContext(rankingProvider: rankingProvider)
+        try context.insertTrackedApp(appStoreID: 123, name: "Cal AI")
+        _ = try await context.service.addKeywords(
+            appStoreID: 123,
+            keywords: ["beta tracker", "alpha tracker"],
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        let refresh = try await context.service.refreshKeywordRankings(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone",
+            limit: 1
+        )
+
+        #expect(refresh.summary.refreshed == 1)
+        #expect(await rankingProvider.searchedKeysSnapshot() == [
+            TrackedAppKeyword.makeQueryKey(term: "alpha tracker", storefront: "us", platform: .iphone)
+        ])
+    }
+
+    @Test
+    func refreshKeywordRankingsRepeatedCallsCumulativelyCoverTrackedSetBeyondDefaultLimit() async throws {
+        let rankingProvider = StubMCPRankingProvider(pages: [:])
+        let context = try MCPTestContext(rankingProvider: rankingProvider)
+        try context.insertTrackedApp(appStoreID: 123, name: "Cal AI")
+        let keywords = (1...30).map { "keyword-\($0)" }
+        _ = try await context.service.addKeywords(
+            appStoreID: 123,
+            keywords: keywords,
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        _ = try await context.service.refreshKeywordRankings(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+        let afterFirstCall = try context.modelContext.fetch(FetchDescriptor<TrackedAppKeyword>())
+        // 20 matches OpenASOMCPService.ResponseLimits.defaultKeywordRefreshTrackLimit (private, not visible here).
+        #expect(afterFirstCall.filter { $0.lastRefreshAt != nil }.count == 20)
+
+        _ = try await context.service.refreshKeywordRankings(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+        let afterSecondCall = try context.modelContext.fetch(FetchDescriptor<TrackedAppKeyword>())
+        #expect(afterSecondCall.allSatisfy { $0.lastRefreshAt != nil })
+    }
+
+    @Test
+    func refreshKeywordRankingsSurfacesClampingNoteAndCapsAtMaximumWhenLimitExceedsMaximum() async throws {
+        let rankingProvider = StubMCPRankingProvider(pages: [:])
+        let context = try MCPTestContext(rankingProvider: rankingProvider)
+        try context.insertTrackedApp(appStoreID: 123, name: "Cal AI")
+        let keywords = (1...30).map { "keyword-\($0)" }
+        _ = try await context.service.addKeywords(
+            appStoreID: 123,
+            keywords: keywords,
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        let refresh = try await context.service.refreshKeywordRankings(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone",
+            limit: 60
+        )
+
+        #expect(refresh.notes == [
+            "Requested limit 60 exceeds the maximum of 25 refreshes per call; capped to 25."
+        ])
+        #expect(refresh.outcomes.count == 25)
+    }
+
+    @Test
+    func refreshKeywordRankingsHasNoNotesWhenLimitIsAtOrBelowMaximum() async throws {
+        let rankingProvider = StubMCPRankingProvider(pages: [:])
+        let context = try MCPTestContext(rankingProvider: rankingProvider)
+        try context.insertTrackedApp(appStoreID: 123, name: "Cal AI")
+        _ = try await context.service.addKeywords(
+            appStoreID: 123,
+            keywords: ["calorie tracker"],
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        let refreshWithExplicitLimit = try await context.service.refreshKeywordRankings(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone",
+            limit: 25
+        )
+        #expect(refreshWithExplicitLimit.notes.isEmpty)
+
+        let refreshWithOmittedLimit = try await context.service.refreshKeywordRankings(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+        #expect(refreshWithOmittedLimit.notes.isEmpty)
+    }
+
+    @Test
+    func refreshKeywordRankingsRefreshesAllTracksInOneCallAtExactCapBoundary() async throws {
+        let rankingProvider = StubMCPRankingProvider(pages: [:])
+        let context = try MCPTestContext(rankingProvider: rankingProvider)
+        try context.insertTrackedApp(appStoreID: 123, name: "Cal AI")
+        let keywords = (1...25).map { "keyword-\($0)" }
+        _ = try await context.service.addKeywords(
+            appStoreID: 123,
+            keywords: keywords,
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        let refresh = try await context.service.refreshKeywordRankings(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone",
+            limit: 25
+        )
+
+        #expect(refresh.outcomes.count == 25)
+        #expect(refresh.notes.isEmpty)
+    }
+
+    @Test
+    func refreshKeywordMetricsResultHasEmptyNotesSinceItNeverClampsALimit() async throws {
+        let context = try MCPTestContext(includeKeywordMetricsService: true)
+        try context.insertTrackedApp(appStoreID: 123, name: "Cal AI")
+        _ = try await context.service.addKeywords(
+            appStoreID: 123,
+            keywords: ["calorie tracker"],
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        let metricsRefresh = try await context.service.refreshKeywordMetrics(
+            appStoreID: 123,
+            storefronts: ["us"],
+            platform: "iphone"
+        )
+
+        #expect(metricsRefresh.notes.isEmpty)
+    }
+
+    @Test
+    func refreshKeywordRankingsCoversLargeMultiStorefrontTrackedSetWithinFourCallsMatchingTicketRepro() async throws {
+        let rankingProvider = StubMCPRankingProvider(pages: [:])
+        let context = try MCPTestContext(rankingProvider: rankingProvider)
+        try context.insertTrackedApp(appStoreID: 967_594_709, name: "Repro App")
+        let keywords = (1...34).map { "keyword-\($0)" }
+        _ = try await context.service.addKeywords(
+            appStoreID: 967_594_709,
+            keywords: keywords,
+            storefronts: ["de", "us"],
+            platform: "iphone"
+        )
+
+        for storefront in ["de", "us"] {
+            for _ in 1...2 {
+                _ = try await context.service.refreshKeywordRankings(
+                    appStoreID: 967_594_709,
+                    storefronts: [storefront],
+                    platform: "iphone",
+                    limit: 40
+                )
+            }
+        }
+
+        let tracks = try context.modelContext.fetch(FetchDescriptor<TrackedAppKeyword>())
+        #expect(tracks.count == 68)
+        #expect(tracks.allSatisfy { $0.lastRefreshAt != nil })
+    }
+
+    @Test
     func refreshKeywordMetricsWithInjectedServiceFailsGracefullyWhenAppleAdsIsNotConfigured() async throws {
         let resolver = StubMCPAppResolver(resolvedApps: [
             123: makeResolvedApp(appStoreID: 123, name: "Cal AI")

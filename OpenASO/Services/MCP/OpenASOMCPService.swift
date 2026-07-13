@@ -802,6 +802,14 @@ final class OpenASOMCPService: Sendable {
       maximum: ResponseLimits.maximumKeywordRefreshTrackLimit
     )
     let resultLimit = ResponseLimits.defaultRankingAppLimit
+    let notes: [String] =
+      if let limit, limit > ResponseLimits.maximumKeywordRefreshTrackLimit {
+        [
+          "Requested limit \(limit) exceeds the maximum of \(ResponseLimits.maximumKeywordRefreshTrackLimit) refreshes per call; capped to \(ResponseLimits.maximumKeywordRefreshTrackLimit)."
+        ]
+      } else {
+        []
+      }
 
     let requestBatch = try await backgroundModelStore.read { modelContext in
       let descriptor = FetchDescriptor<TrackedAppKeyword>(
@@ -814,8 +822,24 @@ final class OpenASOMCPService: Sendable {
         if let platform, track.platform != platform { return false }
         return true
       }
+      // Recency-based rotation: never-refreshed (nil) tracks sort first, then oldest-refreshed
+      // first, so repeated calls make cumulative progress instead of reselecting the same
+      // subset every time. This deliberately diverges from RankingRefreshCoordinator's
+      // unbounded background-job selection, which has no per-call cap to rotate around.
       let sorted = matches.sorted { lhs, rhs in
-        lhs.identityKey < rhs.identityKey
+        switch (lhs.lastRefreshAt, rhs.lastRefreshAt) {
+        case (nil, nil):
+          return lhs.identityKey < rhs.identityKey
+        case (nil, _):
+          return true
+        case (_, nil):
+          return false
+        case let (lhsDate?, rhsDate?):
+          if lhsDate != rhsDate {
+            return lhsDate < rhsDate
+          }
+          return lhs.identityKey < rhs.identityKey
+        }
       }
       return (
         requests: Array(sorted.prefix(trackLimit)).map { RankingRefreshRequest(track: $0) },
@@ -895,14 +919,15 @@ final class OpenASOMCPService: Sendable {
       }
       let failures = outcomes.filter { $0.error != nil }.count
       return OpenASOMCPKeywordRefreshResult(
+        notes: notes,
+        outcomes: outcomes,
         summary: OpenASOMCPMutationSummary(
           inserted: 0,
           updated: 0,
           skipped: max(0, requestBatch.totalCount - requestBatch.requests.count),
           refreshed: outcomes.count - failures,
           failed: failures
-        ),
-        outcomes: outcomes
+        )
       )
     }
   }
@@ -987,14 +1012,15 @@ final class OpenASOMCPService: Sendable {
       }
       let failures = outcomes.filter { $0.error != nil }.count
       return OpenASOMCPKeywordRefreshResult(
+        notes: [],
+        outcomes: outcomes,
         summary: OpenASOMCPMutationSummary(
           inserted: 0,
           updated: outcomes.count,
           skipped: 0,
           refreshed: outcomes.count - failures,
           failed: failures
-        ),
-        outcomes: outcomes
+        )
       )
     }
   }
